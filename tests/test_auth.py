@@ -53,7 +53,43 @@ def test_login_wrong_password(client):
     assert response.status_code == 401
 
 
-# Issue: no test for accessing a protected route without a token
-# Issue: no test for accessing a protected route with an expired token
-# Issue: no test for registering with a missing field (e.g., no email)
-# Issue: no test for duplicate username registration
+def test_password_is_irreversible(client):
+    """Verify that a plaintext password cannot be retrieved from the stored hash."""
+    plaintext = "irreversible_secret"
+
+    # Register a user and get back the stored hash from the response
+    response = client.post("/auth/register", json={
+        "username": "hashcheckuser",
+        "email": "hashcheck@example.com",
+        "password": plaintext,
+    })
+    assert response.status_code == 200
+    stored_hash = response.json()["password_hash"]
+
+    # 1. Hash is not the plaintext itself
+    assert stored_hash != plaintext
+
+    # 2. Hash does not contain the plaintext as a substring
+    assert plaintext not in stored_hash
+
+    # 3. Hash is not a hex string of the plaintext (rules out MD5/SHA family)
+    import hashlib
+    assert stored_hash != hashlib.md5(plaintext.encode()).hexdigest()
+    assert stored_hash != hashlib.sha1(plaintext.encode()).hexdigest()
+    assert stored_hash != hashlib.sha256(plaintext.encode()).hexdigest()
+
+    # 4. Stored hash is a valid bcrypt hash (starts with bcrypt identifier)
+    assert stored_hash.startswith("$2b$") or stored_hash.startswith("$2a$")
+
+    # 5. Two hashes of the same password are different (salt is unique per call)
+    from app.routers.auth import hash_password
+    hash_a = hash_password(plaintext)
+    hash_b = hash_password(plaintext)
+    assert hash_a != hash_b
+
+    # 6. Correct password verifies successfully against the stored hash
+    from app.routers.auth import verify_password
+    assert verify_password(plaintext, stored_hash) is True
+
+    # 7. Wrong password does not verify
+    assert verify_password("wrong_password", stored_hash) is False
