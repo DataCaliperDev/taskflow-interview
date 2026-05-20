@@ -13,6 +13,12 @@ from app.utils.helpers import calculate_priority_score, parse_tags
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
+def require_admin_or_task_owner(current_user: models.User, task: models.Task) -> None:
+    """Raise 403 if the current user is not an admin and does not own the task."""
+    if current_user.role != "admin" and task.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+
 @router.get("/", response_model=List[schemas.TaskOut])
 def list_tasks(
     status: Optional[str] = None,
@@ -84,7 +90,7 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership check — any user can update any task
+    require_admin_or_task_owner(current_user, task)
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -104,7 +110,7 @@ def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership / admin check before deleting
+    require_admin_or_task_owner(current_user, task)
     db.delete(task)
     db.commit()
     # Issue: should return 204 No Content; returning a body with 200 is inconsistent
