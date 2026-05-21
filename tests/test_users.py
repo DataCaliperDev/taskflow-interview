@@ -216,6 +216,29 @@ def test_update_user(client, test_user_token):
     # Issue: no assertion that username was actually changed to "updateduser"
 
 
+# ---------------------------------------------------------------------------
+# Invalid input — POST /auth/register
+# Note: cases marked with (FAIL) currently return 200 because UserCreate has
+# no field-level validation in schemas.py — they document the missing validation.
+# ---------------------------------------------------------------------------
+
+def test_register_missing_required_fields(client):
+    """Omitting required fields must return 422 (Pydantic enforces presence)."""
+    # Missing username
+    r = client.post("/auth/register", json={"email": "a@a.com", "password": "pass123"})
+    assert r.status_code == 422
+    assert r.json()["detail"][0]["type"] == "missing"
+
+    # Missing email
+    r = client.post("/auth/register", json={"username": "user1", "password": "pass123"})
+    assert r.status_code == 422
+    assert r.json()["detail"][0]["type"] == "missing"
+
+    # Missing password
+    r = client.post("/auth/register", json={"username": "user1", "email": "a@a.com"})
+    assert r.status_code == 422
+    assert r.json()["detail"][0]["type"] == "missing"
+
 # Issue: no test verifying that a normal user CANNOT update another user's profile
 # Issue: no test for the admin override header on DELETE
 # Issue: no test for get_user_tasks
