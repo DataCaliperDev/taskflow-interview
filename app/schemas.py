@@ -173,6 +173,11 @@ class Page(BaseModel, Generic[T]):
     total_pages: int
 
 
+# Tag list returned by GET /tasks/{id}/tags.
+class TaskTags(BaseModel):
+    tags: List[str]
+
+
 # One row of the per-user task summary (UC-5). Pulling this out as a
 # named shape stops the aggregation rewrite from silently changing
 # the response.
