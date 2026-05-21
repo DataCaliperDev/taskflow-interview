@@ -4,16 +4,37 @@ import { Link, useNavigate } from 'react-router-dom'
 import { authApi } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
+/**
+ * Parse an API error into a list of human-readable strings.
+ *
+ * - Pydantic 422: detail is an array of objects → extract each `msg`,
+ *   stripping the "Value error, " prefix that Pydantic v2 prepends.
+ * - Any other error (400, 500, …): detail is a plain string → wrap in array.
+ */
+function parseErrors(errMessage) {
+  try {
+    const parsed = JSON.parse(errMessage)
+    if (Array.isArray(parsed)) {
+      return parsed.map(e =>
+        (e.msg || String(e)).replace(/^Value error,\s*/i, '')
+      )
+    }
+  } catch {
+    // not JSON — fall through
+  }
+  return [errMessage]
+}
+
 export default function Register() {
   const { login } = useAuth()
   const navigate = useNavigate()
   const [form, setForm] = useState({ username: '', email: '', password: '' })
-  const [error, setError] = useState('')
+  const [errors, setErrors] = useState([])
   const [loading, setLoading] = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
-    setError('')
+    setErrors([])
     setLoading(true)
     try {
       await authApi.register(form)
@@ -21,7 +42,7 @@ export default function Register() {
       await login(data.access_token)
       navigate('/')
     } catch (err) {
-      setError(err.message)
+      setErrors(parseErrors(err.message))
     } finally {
       setLoading(false)
     }
@@ -33,7 +54,16 @@ export default function Register() {
         <div className="auth-title">Create account</div>
         <div className="auth-sub">Get started with TaskFlow</div>
 
-        {error && <div className="alert alert-error">{error}</div>}
+        {errors.length > 0 && (
+          <div className="alert alert-error">
+            {errors.length === 1
+              ? errors[0]
+              : <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {errors.map((msg, i) => <li key={i}>{msg}</li>)}
+                </ul>
+            }
+          </div>
+        )}
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">

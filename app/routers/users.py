@@ -57,7 +57,21 @@ def update_user(
 
     if user_data.username:
         user.username = user_data.username
+        conflict = (
+            db.query(models.User)
+            .filter(models.User.username == user_data.username, models.User.id != user_id)
+            .first()
+        )
+        if conflict:
+            raise HTTPException(status_code=400, detail="Username already in use")
     if user_data.email:
+        conflict = (
+            db.query(models.User)
+            .filter(models.User.email == user_data.email, models.User.id != user_id)
+            .first()
+        )
+        if conflict:
+            raise HTTPException(status_code=400, detail="Email already in use")
         user.email = user_data.email
     if user_data.password:
         user.password_hash = hash_password(user_data.password)
