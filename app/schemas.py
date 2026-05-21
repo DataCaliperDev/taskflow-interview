@@ -1,11 +1,37 @@
-# app/schemas.py
+"""Wire shapes (request bodies and response payloads).
+
+Two shapes encode domain rules that other layers depend on:
+
+    UserPublic       -- the safe view of a user: identity, role,
+                        activity, timestamps. Never includes the
+                        password hash, even for the user themselves.
+    TaskSummaryRow   -- one row of the per-user task summary
+                        (UC-5). Stable schema so the aggregation
+                        rewrite cannot drift the response.
+
+List endpoints wrap their items in ``app.pagination.Page[T]`` (UC-6);
+the item types live here.
+"""
+
+from datetime import datetime
+from typing import Generic, List, Optional, TypedDict, TypeVar
 
 from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
+
+T = TypeVar("T")
 
 
-# ── Auth ────────────────────────────────────────────────────────────────────
+# Auth
+class JwtClaims(TypedDict, total=False):
+    """Claims encoded in our access tokens.
+
+    ``sub`` is the username of the bearer; ``exp`` is added by the
+    token issuer.
+    """
+
+    sub: str
+    exp: datetime
+
 
 class Token(BaseModel):
     access_token: str
@@ -16,13 +42,11 @@ class TokenData(BaseModel):
     username: Optional[str] = None
 
 
-# ── User ─────────────────────────────────────────────────────────────────────
-
+# User
 class UserCreate(BaseModel):
     username: str
     email: str
     password: str
-    # Issue: no field-level validation — no min length, no email format check, no password strength
 
 
 class UserUpdate(BaseModel):
@@ -31,17 +55,22 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
 
 
-class UserOut(BaseModel):
+class UserPublic(BaseModel):
+    """The safe view of a user. Never carries the password hash."""
+
     id: int
     username: str
     email: str
-    password_hash: str   # Issue: password hash is exposed in the response schema
     is_active: bool
     role: str
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+# Backwards-compat alias for code paths that import UserOut.
+UserOut = UserPublic
 
 
 class UserSummary(BaseModel):
@@ -52,8 +81,7 @@ class UserSummary(BaseModel):
         from_attributes = True
 
 
-# ── Comment ───────────────────────────────────────────────────────────────────
-
+# Comment
 class CommentCreate(BaseModel):
     content: str
 
@@ -68,8 +96,7 @@ class CommentOut(BaseModel):
         from_attributes = True
 
 
-# ── Task ──────────────────────────────────────────────────────────────────────
-
+# Task
 class TaskCreate(BaseModel):
     title: str
     description: Optional[str] = None
@@ -77,8 +104,6 @@ class TaskCreate(BaseModel):
     priority: Optional[int] = 2
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
-    # Issue: no validation that status is one of the valid values
-    # Issue: no validation that priority is 1, 2, or 3
 
 
 class TaskUpdate(BaseModel):
@@ -104,3 +129,55 @@ class TaskOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+
+
+# Slim row returned by GET /tasks/search. Subset of TaskOut
+# fields -- search results don\'t need to materialise comments.
+class TaskSearchRow(BaseModel):
+    id: int
+    title: str
+    status: str
+    priority: int
+    owner_id: int
+
+    class Config:
+        from_attributes = True
+
+
+
+
+# Pagination wire shapes (UC-6). Page[T] is the response
+# envelope every list endpoint returns; PageDict is the dict
+# shape ``paginate()`` produces, which Pydantic coerces into
+# Page[T] when the endpoint declares ``response_model=Page[T]``.
+class PageDict(TypedDict):
+    """The shape ``paginate()`` returns."""
+
+    items: list[object]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class Page(BaseModel, Generic[T]):
+    """Envelope a list endpoint returns. ``items`` is one page;
+    the rest is the metadata a client uses to render navigation."""
+
+    items: List[T]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+# One row of the per-user task summary (UC-5). Pulling this out as a
+# named shape stops the aggregation rewrite from silently changing
+# the response.
+class TaskSummaryRow(BaseModel):
+    user_id: int
+    username: str
+    task_count: int
+    avg_priority_score: float
