@@ -7,64 +7,69 @@ Tests for the /tasks endpoints.
 import pytest
 
 
-# Issue: test depends on the order in which tests run (relies on task created by test_create_task)
-# Issue: no fixture or factory — tests share state via module-level variables
-created_task_id = None
-
-
-def test_create_task(client, test_user_token):
-    global created_task_id
-
+@pytest.fixture(scope="function")
+def created_task(client, test_user_token):
+    """Create a task and return its full response payload. Each test gets a fresh task."""
     response = client.post(
         "/tasks/",
         json={"title": "Test Task", "priority": 2, "status": "todo"},
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
-    # Issue: only checks status code, not response body structure
     assert response.status_code == 200
-    created_task_id = response.json()["id"]
+    return response.json()
 
 
-def test_list_tasks(client, test_user_token):
+def test_create_task(created_task):
+    assert created_task["id"] is not None
+    assert created_task["title"] == "Test Task"
+    assert created_task["priority"] == 2
+    assert created_task["status"] == "todo"
+
+
+def test_list_tasks(client, test_user_token, created_task):
     response = client.get(
         "/tasks/",
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
-    # Issue: only asserts that the response is a list — doesn't verify contents
-    assert isinstance(response.json(), list)
+    ids = [t["id"] for t in response.json()]
+    assert created_task["id"] in ids
 
 
-def test_get_task(client, test_user_token):
-    # Issue: depends on test_create_task having run first
+def test_get_task(client, test_user_token, created_task):
     response = client.get(
-        f"/tasks/{created_task_id}",
+        f"/tasks/{created_task['id']}",
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
+    assert response.json()["id"] == created_task["id"]
 
 
-def test_update_task(client, test_user_token):
+def test_update_task(client, test_user_token, created_task):
     response = client.put(
-        f"/tasks/{created_task_id}",
+        f"/tasks/{created_task['id']}",
         json={"status": "in_progress"},
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
-    # Issue: no assertion on the returned status value — doesn't confirm the update was applied
     assert response.status_code == 200
+    assert response.json()["status"] == "in_progress"
 
 
-def test_delete_task(client, test_user_token):
+def test_delete_task(client, test_user_token, created_task):
     response = client.delete(
-        f"/tasks/{created_task_id}",
+        f"/tasks/{created_task['id']}",
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
 
 
-def test_get_deleted_task(client, test_user_token):
+def test_get_deleted_task(client, test_user_token, created_task):
+    client.delete(
+        f"/tasks/{created_task['id']}",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
     response = client.get(
-        f"/tasks/{created_task_id}",
+        f"/tasks/{created_task['id']}",
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 404
@@ -72,9 +77,54 @@ def test_get_deleted_task(client, test_user_token):
 
 # Issue: no test for the search endpoint
 # Issue: no test for the /summary/by-user endpoint
-# Issue: no test for unauthorized access (missing auth header)
 # Issue: no test for invalid inputs (e.g., priority=99, status="invalid")
 # Issue: no test for adding/retrieving comments
+
+
+# ---------------------------------------------------------------------------
+# Unauthorized access — no token / invalid token
+# ---------------------------------------------------------------------------
+
+def test_list_tasks_no_token(client):
+    """GET /tasks/ without a token must return 401."""
+    response = client.get("/tasks/")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated"
+
+
+def test_create_task_no_token(client):
+    """POST /tasks/ without a token must return 401."""
+    response = client.post("/tasks/", json={"title": "Hack", "priority": 1, "status": "todo"})
+    assert response.status_code == 401
+
+
+def test_get_task_no_token(client, test_user_token, created_task):
+    """GET /tasks/{id} without a token must return 401."""
+    response = client.get(f"/tasks/{created_task['id']}")
+    assert response.status_code == 401
+
+
+def test_update_task_no_token(client, test_user_token, created_task):
+    """PUT /tasks/{id} without a token must return 401."""
+    response = client.put(f"/tasks/{created_task['id']}", json={"status": "done"})
+    assert response.status_code == 401
+
+
+def test_delete_task_no_token(client, test_user_token, created_task):
+    """DELETE /tasks/{id} without a token must return 401."""
+    response = client.delete(f"/tasks/{created_task['id']}")
+    assert response.status_code == 401
+
+
+def test_endpoints_reject_invalid_token(client, test_user_token, created_task):
+    """All protected /tasks endpoints must return 401 for a malformed token."""
+    bad_headers = {"Authorization": "Bearer this.is.not.a.valid.jwt"}
+    task_id = created_task["id"]
+    assert client.get("/tasks/",            headers=bad_headers).status_code == 401
+    assert client.post("/tasks/",           headers=bad_headers, json={}).status_code == 401
+    assert client.get(f"/tasks/{task_id}",  headers=bad_headers).status_code == 401
+    assert client.put(f"/tasks/{task_id}",  headers=bad_headers, json={}).status_code == 401
+    assert client.delete(f"/tasks/{task_id}",headers=bad_headers).status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +174,7 @@ def _create_task(client, token, title):
 # Fixture — 1 admin + 2 members, each with their own task
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def task_auth_users(client):
     """
     Creates:

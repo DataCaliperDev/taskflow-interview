@@ -45,7 +45,7 @@ def _promote_to_admin(user_id: int):
 # Authorization fixture — 1 admin + 2 members, created once per module
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def auth_users(client):
     """
     Returns a dict with tokens and IDs for:
@@ -155,8 +155,49 @@ def test_list_users_authenticated(client, test_user_token):
 
 def test_list_users_unauthenticated(client):
     response = client.get("/users/")
-    # Issue: test expects 401, which is correct — but it only checks the code, not the error message
     assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated"
+
+
+# ---------------------------------------------------------------------------
+# Unauthorized access — no token / invalid token
+# ---------------------------------------------------------------------------
+
+def test_get_me_no_token(client):
+    """GET /users/me without a token must return 401."""
+    response = client.get("/users/me")
+    assert response.status_code == 401
+
+
+def test_get_user_no_token(client, test_user_token):
+    """GET /users/{id} without a token must return 401."""
+    me = client.get("/users/me", headers={"Authorization": f"Bearer {test_user_token}"}).json()
+    response = client.get(f"/users/{me['id']}")
+    assert response.status_code == 401
+
+
+def test_update_user_no_token(client, test_user_token):
+    """PUT /users/{id} without a token must return 401."""
+    me = client.get("/users/me", headers={"Authorization": f"Bearer {test_user_token}"}).json()
+    response = client.put(f"/users/{me['id']}", json={"email": "x@x.com"})
+    assert response.status_code == 401
+
+
+def test_delete_user_no_token(client, test_user_token):
+    """DELETE /users/{id} without a token must return 401."""
+    me = client.get("/users/me", headers={"Authorization": f"Bearer {test_user_token}"}).json()
+    response = client.delete(f"/users/{me['id']}")
+    assert response.status_code == 401
+
+
+def test_endpoints_reject_invalid_token(client):
+    """All protected /users endpoints must return 401 for a malformed token."""
+    bad_headers = {"Authorization": "Bearer this.is.not.a.valid.jwt"}
+    assert client.get("/users/",    headers=bad_headers).status_code == 401
+    assert client.get("/users/me",  headers=bad_headers).status_code == 401
+    assert client.get("/users/1",   headers=bad_headers).status_code == 401
+    assert client.put("/users/1",   headers=bad_headers, json={}).status_code == 401
+    assert client.delete("/users/1",headers=bad_headers).status_code == 401
 
 
 def test_update_user(client, test_user_token):
