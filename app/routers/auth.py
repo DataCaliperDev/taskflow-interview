@@ -88,7 +88,7 @@ def get_current_active_user(
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
-) -> dict[str, str]:
+) -> schemas.Token:
     user = db.query(models.User).filter(
         models.User.username == form_data.username
     ).first()
@@ -103,7 +103,7 @@ def login(
         data={"sub": user.username},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    return {"access_token": token, "token_type": "bearer"}
+    return schemas.Token(access_token=token, token_type="bearer")
 
 
 @router.post("/register", response_model=schemas.UserPublic, status_code=201)
