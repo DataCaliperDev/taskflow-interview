@@ -30,6 +30,19 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
+# Reset the schema at the start of every test session so the suite is
+# repeatable. Without this, `test.db` keeps state from the previous run —
+# e.g. `test_update_user` renames `testuser`, which then breaks the
+# `test_user_token` fixture on the very next invocation (causing every
+# downstream test to error with `KeyError: 'access_token'`). UC-3's victim
+# registrations have the same problem on re-runs.
+@pytest.fixture(scope="session", autouse=True)
+def _reset_db_schema():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
 @pytest.fixture(scope="module")  # Issue: module scope means DB state leaks between tests
 def client():
     with TestClient(app) as c:
