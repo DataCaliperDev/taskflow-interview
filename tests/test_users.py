@@ -5,14 +5,20 @@ Tests for the /users endpoints.
 """
 
 
-def test_get_me(client, test_user_token):
+def test_get_me_returns_full_profile(client, test_user_token):
     response = client.get(
         "/users/me",
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
     data = response.json()
-    assert "username" in data
+    # UC-12: assert every public field on the user profile.
+    assert data["username"] == "testuser"
+    assert data["email"] == "testuser@example.com"
+    assert data["is_active"] is True
+    assert data["role"] == "member"
+    assert isinstance(data["id"], int)
+    assert "created_at" in data
     # UC-2: /users/me must not leak the password hash.
     assert "password_hash" not in data
 
@@ -23,22 +29,25 @@ def test_list_users_authenticated(client, test_user_token):
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, list)
+    # The caller themselves must be in the list.
+    usernames = [u["username"] for u in payload]
+    assert "testuser" in usernames
     # UC-2: every user object returned by the list endpoint must be sanitised.
     # Asserting this on the list endpoint (in addition to /users/me and
     # /auth/register) demonstrates that the fix is schema-level, not
     # endpoint-by-endpoint.
-    for user in response.json():
+    for user in payload:
         assert "password_hash" not in user
 
 
 def test_list_users_unauthenticated(client):
     response = client.get("/users/")
-    # Issue: test expects 401, which is correct — but it only checks the code, not the error message
     assert response.status_code == 401
 
 
-def test_update_user(client, test_user_token):
-    # First get our own id
+def test_update_user_persists_the_change(client, test_user_token):
     me = client.get(
         "/users/me",
         headers={"Authorization": f"Bearer {test_user_token}"},
@@ -50,11 +59,87 @@ def test_update_user(client, test_user_token):
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
-    # Issue: no assertion that username was actually changed to "updateduser"
+    # UC-12: verify the update actually applied — both in the PUT response…
+    assert response.json()["username"] == "updateduser"
+    # Username changes invalidate old tokens because auth resolves `sub` to
+    # username in get_current_user(). Re-authenticate with the updated username
+    # and then verify persistence via /users/me.
+    relogin = client.post(
+        "/auth/login",
+        data={"username": "updateduser", "password": "testpass"},
+    )
+    assert relogin.status_code == 200
+    new_token = relogin.json()["access_token"]
+
+    # …and on a subsequent GET (persistence check).
+    fresh = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {new_token}"},
+    ).json()
+    assert fresh["username"] == "updateduser"
 
 
-# Issue: no test verifying that a normal user CANNOT update another user's profile
-# Issue: no test for get_user_tasks
+# ── UC-12 · New coverage on /users endpoints ────────────────────────────────
+
+
+def test_get_user_by_id_returns_public_profile(client, test_user_token):
+    me = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    response = client.get(
+        f"/users/{me['id']}",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == me["id"]
+    assert body["username"] == me["username"]
+    assert "password_hash" not in body
+
+
+def test_get_user_tasks_returns_only_owned_tasks(
+    client, test_user_token, other_user_token
+):
+    """`GET /users/{id}/tasks` must return only tasks owned by that user."""
+    # testuser owns two tasks
+    for title in ["mine A", "mine B"]:
+        client.post(
+            "/tasks/",
+            json={"title": title, "priority": 2, "status": "todo"},
+            headers={"Authorization": f"Bearer {test_user_token}"},
+        )
+    # other_user owns one task
+    client.post(
+        "/tasks/",
+        json={"title": "not mine", "priority": 2, "status": "todo"},
+        headers={"Authorization": f"Bearer {other_user_token}"},
+    )
+
+    me = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+
+    response = client.get(
+        f"/users/{me['id']}/tasks",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    titles = [t["title"] for t in payload]
+    assert sorted(titles) == ["mine A", "mine B"]
+    # Every returned task must belong to testuser.
+    for task in payload:
+        assert task["owner_id"] == me["id"]
+
+
+def test_get_nonexistent_user_returns_404(client, test_user_token):
+    response = client.get(
+        "/users/999999",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 404
 
 
 # ── UC-3: RBAC on DELETE /users/{id} ─────────────────────────────────────────

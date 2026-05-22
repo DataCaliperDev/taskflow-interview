@@ -1,6 +1,23 @@
 # tests/conftest.py
 
+"""
+Pytest configuration and fixtures.
+
+UC-12 — Test isolation
+======================
+Every test runs against a clean database. The autouse `_reset_db` fixture
+drops and recreates all tables before each test, so no test depends on
+state left behind by another test (no ordering dependencies, no shared
+"created_task_id" globals, no need to register users at module level).
+
+All public fixtures (`client`, `test_user_token`, `other_user_token`,
+`admin_token`, `created_task`) are function-scoped. The cost is a per-test
+schema reset that is well under 50 ms on SQLite — worth it for the
+guarantee that any test can be run in any order.
+"""
+
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,14 +28,10 @@ from app.main import app
 from app.database import Base, get_db
 from app import models
 
-# Issue: uses a separate in-memory DB, but does not reset between individual tests
-# — tests that mutate data will bleed state into later tests
 TEST_DATABASE_URL = "sqlite:///./test.db"
 
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base.metadata.create_all(bind=engine)
 
 
 def override_get_db():
@@ -32,46 +45,34 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-# Reset the schema at the start of every test session so the suite is
-# repeatable. Without this, `test.db` keeps state from the previous run —
-# e.g. `test_update_user` renames `testuser`, which then breaks the
-# `test_user_token` fixture on the very next invocation (causing every
-# downstream test to error with `KeyError: 'access_token'`). UC-3's victim
-# registrations have the same problem on re-runs.
-@pytest.fixture(scope="session", autouse=True)
-def _reset_db_schema():
+# ── DB isolation (UC-12) ──────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_db():
+    """Drop and recreate all tables before every test.
+
+    Function-scoped + autouse, so no test needs to opt in. This is the
+    teardown mechanism the previous module-scoped design was missing —
+    tests can now mutate any row freely without affecting siblings.
+    """
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
 
 
-@pytest.fixture(scope="module")  # Issue: module scope means DB state leaks between tests
+# ── Core fixtures ────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
 def client():
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def test_user_token(client):
-    """Register and log in a test user, returning a bearer token."""
-    client.post("/auth/register", json={
-        "username": "testuser",
-        "email": "testuser@example.com",
-        "password": "testpass",
-    })
-    response = client.post(
-        "/auth/login",
-        data={"username": "testuser", "password": "testpass"},
-    )
-    return response.json()["access_token"]
-
-
-# ── UC-3 fixtures ────────────────────────────────────────────────────────────
-# Authorisation tests need three distinct identities: an owner (test_user_token
-# above), a different non-owner member, and an admin. The /auth/register
-# endpoint doesn't accept a `role` parameter (and shouldn't — that would be a
-# privilege-escalation hole on its own), so the admin's role is promoted
-# directly via the test DB session after registration.
+    # Intentionally NOT used as a context manager: doing so triggers the
+    # FastAPI lifespan startup/shutdown on every single test (~2.8 s each on
+    # this codebase), which destroys the runtime budget under function-scoped
+    # fixtures. The lifespan's only job is to call init_db(), and the
+    # autouse `_reset_db` fixture already creates the schema ahead of every
+    # test — so the lifespan is redundant for the test harness.
+    return TestClient(app)
 
 
 def _login(client, username: str, password: str) -> str:
@@ -81,7 +82,18 @@ def _login(client, username: str, password: str) -> str:
     return response.json()["access_token"]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
+def test_user_token(client):
+    """Register and log in the default member user, return a bearer token."""
+    client.post("/auth/register", json={
+        "username": "testuser",
+        "email": "testuser@example.com",
+        "password": "testpass",  # UC-9: must be ≥ 8 chars
+    })
+    return _login(client, "testuser", "testpass")
+
+
+@pytest.fixture
 def other_user_token(client):
     """A second normal member, used to assert non-owners are blocked."""
     client.post("/auth/register", json={
@@ -92,7 +104,7 @@ def other_user_token(client):
     return _login(client, "other_user", "otherpass")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def admin_token(client):
     """An admin user. Role is promoted via the DB because /auth/register
     intentionally does not expose role assignment."""
@@ -115,10 +127,40 @@ def admin_token(client):
     return _login(client, "admin_user", "adminpass")
 
 
-# ── UC-5 helper ──────────────────────────────────────────────────────────────
+@dataclass
+class CreatedTask:
+    """Bundle returned by the `created_task` fixture so a test can grab
+    everything it needs (task id + owning user's token) in one line."""
+    id: int
+    owner_token: str
+    title: str
+    status: str
+    priority: int
+
+
+@pytest.fixture
+def created_task(client, test_user_token):
+    """Create a task owned by `testuser`. Replaces the previous module-level
+    `created_task_id` global that forced tests to run in a specific order."""
+    payload = {"title": "fixture task", "priority": 2, "status": "todo"}
+    response = client.post(
+        "/tasks/",
+        json=payload,
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    return CreatedTask(
+        id=body["id"],
+        owner_token=test_user_token,
+        title=body["title"],
+        status=body["status"],
+        priority=body["priority"],
+    )
+
+
+# ── UC-5 helper (kept) ───────────────────────────────────────────────────────
 # Generic SQL-query counter used to prove the absence of N+1 patterns.
-# Hooks SQLAlchemy's `before_cursor_execute` event for the duration of the
-# context block and returns a dict with the running count.
 
 
 @pytest.fixture
@@ -137,6 +179,3 @@ def query_counter():
             event.remove(engine, "before_cursor_execute", _on_execute)
 
     return _counter
-
-
-# Issue: no fixture for DB teardown — test.db file persists after the suite runs

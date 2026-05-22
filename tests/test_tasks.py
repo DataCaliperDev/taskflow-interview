@@ -2,79 +2,203 @@
 
 """
 Tests for the /tasks endpoints.
+
+UC-12: each test is independent and asserts on response body fields, not
+just status codes. The module-level `created_task_id` global has been
+replaced by the `created_task` fixture (see conftest.py).
 """
 
 import pytest
 
 
-# Issue: test depends on the order in which tests run (relies on task created by test_create_task)
-# Issue: no fixture or factory — tests share state via module-level variables
-created_task_id = None
+# ── Basic CRUD (UC-12: strengthened assertions, no shared state) ─────────────
 
 
-def test_create_task(client, test_user_token):
-    global created_task_id
-
+def test_create_task_returns_full_resource(client, test_user_token):
     response = client.post(
         "/tasks/",
         json={"title": "Test Task", "priority": 2, "status": "todo"},
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
-    # Issue: only checks status code, not response body structure
     assert response.status_code == 200
-    created_task_id = response.json()["id"]
+    body = response.json()
+    # Verify every field the schema promises is present and correct.
+    assert isinstance(body["id"], int) and body["id"] > 0
+    assert body["title"] == "Test Task"
+    assert body["status"] == "todo"
+    assert body["priority"] == 2
+    assert "owner_id" in body and isinstance(body["owner_id"], int)
+    assert "created_at" in body
+    assert body["comments"] == []
 
 
-def test_list_tasks(client, test_user_token):
+def test_list_tasks_includes_created_task(client, test_user_token, created_task):
     response = client.get(
         "/tasks/",
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
-    # Issue: only asserts that the response is a list — doesn't verify contents
-    assert isinstance(response.json(), list)
+    payload = response.json()
+    assert isinstance(payload, list)
+    ids = [t["id"] for t in payload]
+    assert created_task.id in ids
+    # Spot-check the fixture's task in the list.
+    found = next(t for t in payload if t["id"] == created_task.id)
+    assert found["title"] == created_task.title
+    assert found["status"] == created_task.status
 
 
-def test_get_task(client, test_user_token):
-    # Issue: depends on test_create_task having run first
+def test_get_task_returns_full_body(client, test_user_token, created_task):
     response = client.get(
-        f"/tasks/{created_task_id}",
+        f"/tasks/{created_task.id}",
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == created_task.id
+    assert body["title"] == created_task.title
+    assert body["status"] == created_task.status
+    assert body["priority"] == created_task.priority
 
 
-def test_update_task(client, test_user_token):
+def test_update_task_applies_the_change(client, test_user_token, created_task):
     response = client.put(
-        f"/tasks/{created_task_id}",
+        f"/tasks/{created_task.id}",
         json={"status": "in_progress"},
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
-    # Issue: no assertion on the returned status value — doesn't confirm the update was applied
     assert response.status_code == 200
+    body = response.json()
+    # The PUT response itself must reflect the change…
+    assert body["status"] == "in_progress"
+    # …and a subsequent GET must too (persistence check).
+    fresh = client.get(
+        f"/tasks/{created_task.id}",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    assert fresh["status"] == "in_progress"
+    # Unrelated fields must be untouched.
+    assert fresh["title"] == created_task.title
+    assert fresh["priority"] == created_task.priority
 
 
-def test_delete_task(client, test_user_token):
+def test_delete_task_removes_it(client, test_user_token, created_task):
     response = client.delete(
-        f"/tasks/{created_task_id}",
+        f"/tasks/{created_task.id}",
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
-
-
-def test_get_deleted_task(client, test_user_token):
-    response = client.get(
-        f"/tasks/{created_task_id}",
+    # Follow-up GET must now 404.
+    followup = client.get(
+        f"/tasks/{created_task.id}",
         headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert followup.status_code == 404
+
+
+# ── UC-12 · New coverage ─────────────────────────────────────────────────────
+# Five+ scenarios that were previously untested.
+
+
+@pytest.mark.parametrize(
+    "method,path,json_body",
+    [
+        ("get",    "/tasks/",             None),
+        ("post",   "/tasks/",             {"title": "x", "priority": 2, "status": "todo"}),
+        ("get",    "/tasks/1",            None),
+        ("put",    "/tasks/1",            {"status": "done"}),
+        ("delete", "/tasks/1",            None),
+        ("get",    "/tasks/search",       None),  # also requires `q` but auth gate fires first
+        ("get",    "/tasks/summary/by-user", None),
+        ("post",   "/tasks/1/comments",   {"content": "hi"}),
+        ("get",    "/tasks/1/tags",       None),
+    ],
+)
+def test_protected_endpoints_require_auth(client, method, path, json_body):
+    """Every /tasks/* endpoint must reject anonymous callers with 401."""
+    fn = getattr(client, method)
+    response = fn(path, json=json_body) if json_body is not None else fn(path)
+    assert response.status_code == 401, (
+        f"{method.upper()} {path} returned {response.status_code} without auth"
+    )
+
+
+def test_search_tasks_returns_matches_by_title_fragment(client, test_user_token):
+    headers = {"Authorization": f"Bearer {test_user_token}"}
+    # Three tasks with controlled titles
+    for title in ["alpha report", "beta report", "gamma summary"]:
+        client.post(
+            "/tasks/",
+            json={"title": title, "priority": 2, "status": "todo"},
+            headers=headers,
+        )
+
+    response = client.get("/tasks/search?q=report", headers=headers)
+    assert response.status_code == 200
+    titles = [row["title"] for row in response.json()]
+    assert "alpha report" in titles
+    assert "beta report" in titles
+    assert "gamma summary" not in titles
+
+
+def test_add_comment_and_retrieve_via_task(client, test_user_token, created_task):
+    headers = {"Authorization": f"Bearer {test_user_token}"}
+
+    post_resp = client.post(
+        f"/tasks/{created_task.id}/comments",
+        json={"content": "First comment"},
+        headers=headers,
+    )
+    assert post_resp.status_code == 200
+    comment = post_resp.json()
+    assert comment["content"] == "First comment"
+    assert isinstance(comment["id"], int)
+    assert "author_id" in comment
+    assert "created_at" in comment
+
+    # The comment must be visible when re-fetching the task (TaskOut embeds comments).
+    fresh = client.get(f"/tasks/{created_task.id}", headers=headers).json()
+    contents = [c["content"] for c in fresh["comments"]]
+    assert "First comment" in contents
+
+
+def test_task_tags_are_parsed_into_a_list(client, test_user_token):
+    headers = {"Authorization": f"Bearer {test_user_token}"}
+    created = client.post(
+        "/tasks/",
+        json={
+            "title": "tagged",
+            "priority": 1,
+            "status": "todo",
+            "tags": "urgent,backend,api",
+        },
+        headers=headers,
+    ).json()
+
+    response = client.get(f"/tasks/{created['id']}/tags", headers=headers)
+    assert response.status_code == 200
+    tags = response.json()["tags"]
+    assert isinstance(tags, list)
+    # Helper splits on commas; whitespace handling is not in scope here.
+    assert "urgent" in tags
+    assert "backend" in tags
+    assert "api" in tags
+
+
+@pytest.mark.parametrize("method,extra", [
+    ("get", {}),
+    ("put", {"json": {"status": "done"}}),
+    ("delete", {}),
+])
+def test_operating_on_missing_task_returns_404(
+    client, test_user_token, method, extra
+):
+    response = getattr(client, method)(
+        "/tasks/999999",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+        **extra,
     )
     assert response.status_code == 404
-
-
-# Issue: no test for the search endpoint
-# Issue: no test for the /summary/by-user endpoint
-# Issue: no test for unauthorized access (missing auth header)
-# Issue: no test for invalid inputs (e.g., priority=99, status="invalid")
-# Issue: no test for adding/retrieving comments
 
 
 # ── UC-3: ownership / admin authorisation on tasks ───────────────────────────

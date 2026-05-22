@@ -41,17 +41,28 @@ def test_login_success(client):
         "password": "mypassword",
     })
     assert response.status_code == 200
-    assert "access_token" in response.json()
-    # Issue: doesn't assert token_type == "bearer"
-    # Issue: doesn't verify the token is actually a valid JWT
+    body = response.json()
+    # UC-12: verify the full Token contract, not just presence of access_token.
+    assert isinstance(body["access_token"], str) and len(body["access_token"]) > 0
+    assert body["token_type"] == "bearer"
+    # A JWT is three dot-separated base64 segments — a coarse but useful sanity check.
+    assert body["access_token"].count(".") == 2
 
 
 def test_login_wrong_password(client):
+    # Pre-register so the failure is "wrong password", not "user does not exist".
+    client.post("/auth/register", json={
+        "username": "loginuser",
+        "email": "login@example.com",
+        "password": "mypassword",
+    })
     response = client.post("/auth/login", data={
         "username": "loginuser",
         "password": "wrongpassword",
     })
     assert response.status_code == 401
+    # UC-12: confirm the error body matches the documented contract.
+    assert response.json()["detail"] == "Incorrect username or password"
 
 
 # Issue: no test for accessing a protected route without a token

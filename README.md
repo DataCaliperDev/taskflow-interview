@@ -52,6 +52,28 @@ python run.py
 - Interactive docs: http://localhost:8000/docs
 - OpenAPI schema: http://localhost:8000/openapi.json
 
+## Test Coverage
+
+Run tests and print app-code coverage percentage:
+
+```bash
+python scripts/coverage_report.py
+```
+
+The command fails when coverage is below 80% (default gate).
+
+Print only the numeric percentage (useful for scripts/CI):
+
+```bash
+python scripts/coverage_report.py --percent-only
+```
+
+Override the gate if needed:
+
+```bash
+python scripts/coverage_report.py --min-percent 80
+```
+
 ---
 
 ## Technology Stack
