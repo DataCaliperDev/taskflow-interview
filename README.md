@@ -74,6 +74,16 @@ Override the gate if needed:
 python scripts/coverage_report.py --min-percent 80
 ```
 
+## UC Documents
+
+Detailed implementation notes are available per use case:
+
+- `UC-2.md` — Sensitive Data Exposure
+- `UC-3.md` — Authorization Gaps
+- `UC-5.md` — N+1 Query Performance
+- `UC-9.md` — Input Validation
+- `UC-12.md` — Test Suite Improvement
+
 ---
 
 ## Technology Stack
