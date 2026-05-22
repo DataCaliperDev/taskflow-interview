@@ -13,7 +13,8 @@ def test_get_me(client, test_user_token):
     assert response.status_code == 200
     data = response.json()
     assert "username" in data
-    # Issue: does not assert that password_hash is NOT in the response
+    # UC-2: /users/me must not leak the password hash.
+    assert "password_hash" not in data
 
 
 def test_list_users_authenticated(client, test_user_token):
@@ -22,6 +23,12 @@ def test_list_users_authenticated(client, test_user_token):
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
+    # UC-2: every user object returned by the list endpoint must be sanitised.
+    # Asserting this on the list endpoint (in addition to /users/me and
+    # /auth/register) demonstrates that the fix is schema-level, not
+    # endpoint-by-endpoint.
+    for user in response.json():
+        assert "password_hash" not in user
 
 
 def test_list_users_unauthenticated(client):
