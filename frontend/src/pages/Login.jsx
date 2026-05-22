@@ -54,10 +54,12 @@ export default function Login() {
           Don't have an account? <Link to="/register">Create one</Link>
         </div>
 
-        <div style={{ marginTop: 20, padding: 12, background: '#f7fafc', borderRadius: 8, fontSize: 13, color: '#718096' }}>
-          <strong>Demo accounts:</strong><br />
-          alice / alice123 (admin) &nbsp;·&nbsp; bob / bob123
-        </div>
+        {import.meta.env.DEV && (
+          <div style={{ marginTop: 20, padding: 12, background: '#f7fafc', borderRadius: 8, fontSize: 13, color: '#718096' }}>
+            <strong>Demo accounts:</strong><br />
+            alice / alice123 (admin) &nbsp;·&nbsp; bob / bob123
+          </div>
+        )}
       </div>
     </div>
   )

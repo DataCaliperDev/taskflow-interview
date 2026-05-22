@@ -1,7 +1,7 @@
 # app/schemas.py
 
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List, Literal
 from datetime import datetime
 
 
@@ -19,23 +19,21 @@ class TokenData(BaseModel):
 # ── User ─────────────────────────────────────────────────────────────────────
 
 class UserCreate(BaseModel):
-    username: str
-    email: str
-    password: str
-    # Issue: no field-level validation — no min length, no email format check, no password strength
+    username: str = Field(min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(min_length=8)
 
 
 class UserUpdate(BaseModel):
-    username: Optional[str] = None
-    email: Optional[str] = None
-    password: Optional[str] = None
+    username: Optional[str] = Field(default=None, min_length=3, max_length=50)
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(default=None, min_length=8)
 
 
 class UserOut(BaseModel):
     id: int
     username: str
     email: str
-    password_hash: str   # Issue: password hash is exposed in the response schema
     is_active: bool
     role: str
     created_at: datetime
@@ -70,22 +68,23 @@ class CommentOut(BaseModel):
 
 # ── Task ──────────────────────────────────────────────────────────────────────
 
+TaskStatus = Literal["todo", "in_progress", "done"]
+
+
 class TaskCreate(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=200)
     description: Optional[str] = None
-    status: Optional[str] = "todo"
-    priority: Optional[int] = 2
+    status: TaskStatus = "todo"
+    priority: int = Field(default=2, ge=1, le=3)
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
-    # Issue: no validation that status is one of the valid values
-    # Issue: no validation that priority is 1, 2, or 3
 
 
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = None
-    status: Optional[str] = None
-    priority: Optional[int] = None
+    status: Optional[TaskStatus] = None
+    priority: Optional[int] = Field(default=None, ge=1, le=3)
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
 
@@ -104,3 +103,11 @@ class TaskOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TaskPage(BaseModel):
+    items: List[TaskOut]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

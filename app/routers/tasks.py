@@ -1,8 +1,9 @@
 # app/routers/tasks.py
 
+import math
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import text
 
 from app import models, schemas
@@ -13,24 +14,39 @@ from app.utils.helpers import calculate_priority_score, parse_tags
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@router.get("/", response_model=List[schemas.TaskOut])
+@router.get("/", response_model=schemas.TaskPage)
 def list_tasks(
     status: Optional[str] = None,
     owner_id: Optional[int] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """Return all tasks. Optionally filter by status or owner."""
-    # Issue: No pagination — returns ALL rows; will break under load
-    tasks = db.query(models.Task).all()
-
-    # Issue: filtering done in Python instead of the database
+    """Return a page of tasks. Optionally filter by status or owner."""
+    query = db.query(models.Task).options(selectinload(models.Task.comments))
     if status:
-        tasks = [t for t in tasks if t.status == status]
+        query = query.filter(models.Task.status == status)
     if owner_id:
-        tasks = [t for t in tasks if t.owner_id == owner_id]
+        query = query.filter(models.Task.owner_id == owner_id)
 
-    return tasks
+    total = query.order_by(None).count()
+    # Deterministic order so the same row never appears on two different pages.
+    items = (
+        query.order_by(models.Task.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    total_pages = math.ceil(total / page_size) if total else 0
+
+    return schemas.TaskPage(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
 
 
 @router.get("/search")

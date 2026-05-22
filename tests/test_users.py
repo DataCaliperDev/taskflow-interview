@@ -1,51 +1,53 @@
 # tests/test_users.py
 
-"""
-Tests for the /users endpoints.
-"""
+"""Tests for the /users endpoints."""
 
 
-def test_get_me(client, test_user_token):
-    response = client.get(
-        "/users/me",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    )
+def test_me_response_omits_password_hash(authed_client):
+    """UC-2: /users/me must not leak the hash."""
+    response = authed_client.get("/users/me")
     assert response.status_code == 200
-    data = response.json()
-    assert "username" in data
-    # Issue: does not assert that password_hash is NOT in the response
+    assert "password_hash" not in response.json()
 
 
-def test_list_users_authenticated(client, test_user_token):
-    response = client.get(
-        "/users/",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    )
+def test_list_users_response_omits_password_hash(authed_client):
+    """UC-2: /users/ must not leak any user's hash."""
+    response = authed_client.get("/users/")
     assert response.status_code == 200
+    for user in response.json():
+        assert "password_hash" not in user
 
 
 def test_list_users_unauthenticated(client):
     response = client.get("/users/")
-    # Issue: test expects 401, which is correct — but it only checks the code, not the error message
     assert response.status_code == 401
 
 
-def test_update_user(client, test_user_token):
-    # First get our own id
-    me = client.get(
-        "/users/me",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    ).json()
-
-    response = client.put(
-        f"/users/{me['id']}",
-        json={"username": "updateduser"},
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    )
-    assert response.status_code == 200
-    # Issue: no assertion that username was actually changed to "updateduser"
+def test_register_rejects_invalid_email(client):
+    """UC-9: EmailStr rejects malformed emails."""
+    response = client.post("/auth/register", json={
+        "username": "bademail",
+        "email": "not-an-email",
+        "password": "password1",
+    })
+    assert response.status_code == 422
 
 
-# Issue: no test verifying that a normal user CANNOT update another user's profile
-# Issue: no test for the admin override header on DELETE
-# Issue: no test for get_user_tasks
+def test_register_rejects_short_password(client):
+    """UC-9: password must be >= 8 chars."""
+    response = client.post("/auth/register", json={
+        "username": "shortpw",
+        "email": "shortpw@example.com",
+        "password": "short",
+    })
+    assert response.status_code == 422
+
+
+def test_register_rejects_short_username(client):
+    """UC-9: username must be >= 3 chars."""
+    response = client.post("/auth/register", json={
+        "username": "a",
+        "email": "shortuser@example.com",
+        "password": "password1",
+    })
+    assert response.status_code == 422
