@@ -47,3 +47,9 @@ Run full suite:
 python -m pytest -q
 ```
 
+Generate HTML coverage report:
+
+```bash
+python -m pytest --cov=app --cov-report=html
+```
+

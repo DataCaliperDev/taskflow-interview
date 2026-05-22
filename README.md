@@ -68,6 +68,18 @@ Print only the numeric percentage (useful for scripts/CI):
 python scripts/coverage_report.py --percent-only
 ```
 
+Generate the full HTML coverage report:
+
+```bash
+python -m pytest --cov=app --cov-report=html
+```
+
+Then open:
+
+```text
+htmlcov/index.html
+```
+
 Override the gate if needed:
 
 ```bash
