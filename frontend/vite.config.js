@@ -8,10 +8,13 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/auth': 'http://localhost:8000',
-      '/tasks': 'http://localhost:8000',
-      '/users': 'http://localhost:8000',
-      '/health': 'http://localhost:8000',
+      // IMPORTANT: use /api prefix so frontend SPA routes such as /users
+      // are not mistaken for backend endpoints on browser refresh.
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
     }
   }
 })

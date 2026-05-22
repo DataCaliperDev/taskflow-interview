@@ -45,15 +45,42 @@ def get_current_user(
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
+        subject: str = payload.get("sub")
+        if subject is None:
             raise credentials_exception
+        token_version_claim = payload.get("tv")
     except JWTError:
         raise credentials_exception
 
-    user = db.query(models.User).filter(models.User.username == username).first()
+    # Session-stability fix:
+    # New tokens store stable user id in `sub` so username changes do not
+    # invalidate existing sessions. For backward compatibility during rollout,
+    # accept legacy username-based tokens as fallback.
+    user = None
+    if str(subject).isdigit():
+        user = (
+            db.query(models.User)
+            .filter(models.User.id == int(subject))
+            .first()
+        )
+    if user is None:
+        user = (
+            db.query(models.User)
+            .filter(models.User.username == subject)
+            .first()
+        )
     if user is None:
         raise credentials_exception
+
+    # Token-version check (session invalidation):
+    # if claim exists and does not match current user token_version, reject.
+    # Legacy tokens without `tv` stay valid for backward compatibility.
+    if token_version_claim is not None:
+        try:
+            if int(token_version_claim) != int(user.token_version):
+                raise credentials_exception
+        except (TypeError, ValueError):
+            raise credentials_exception
     return user
 
 
@@ -113,7 +140,7 @@ def login(
         )
 
     token = create_access_token(
-        data={"sub": user.username},
+        data={"sub": str(user.id), "tv": int(user.token_version)},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     return {"access_token": token, "token_type": "bearer"}

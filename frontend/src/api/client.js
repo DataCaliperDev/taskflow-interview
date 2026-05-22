@@ -1,8 +1,17 @@
 // src/api/client.js
-const BASE_URL = ''   // proxied via vite → http://localhost:8000
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+// In dev, Vite proxies /api/* -> http://localhost:8000/*
+// This prevents collisions with frontend SPA routes like /users.
 
 function getToken() {
   return localStorage.getItem('token')
+}
+
+export class ApiAuthError extends Error {
+  constructor(message = 'Unauthorized') {
+    super(message)
+    this.name = 'ApiAuthError'
+  }
 }
 
 async function request(path, options = {}) {
@@ -13,9 +22,10 @@ async function request(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers })
 
   if (res.status === 401) {
+    // Do not hard-redirect here. Let React auth state + route guards handle
+    // navigation, otherwise we get full-page jumps and brittle UX.
     localStorage.removeItem('token')
-    window.location.href = '/login'
-    return
+    throw new ApiAuthError('Unauthorized')
   }
 
   const data = res.headers.get('content-type')?.includes('application/json')
@@ -34,13 +44,21 @@ async function request(path, options = {}) {
 export const authApi = {
   login: (username, password) => {
     const body = new URLSearchParams({ username, password })
-    return fetch('/auth/login', {
+    return fetch(`${BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
     }).then(async res => {
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Login failed')
+      const isJson = res.headers.get('content-type')?.includes('application/json')
+      let data = null
+      if (isJson) {
+        data = await res.json()
+      } else {
+        // Avoid "Unexpected token ..." when backend returns plain-text 500.
+        const text = await res.text()
+        data = text ? { detail: text } : null
+      }
+      if (!res.ok) throw new Error(data?.detail || 'Login failed')
       return data
     })
   },

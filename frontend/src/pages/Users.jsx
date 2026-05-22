@@ -48,6 +48,12 @@ export default function Users() {
   }
 
   async function handleDelete() {
+    // UI safety-net: never allow self-delete from this screen.
+    if (deleteId === me?.id) {
+      setError('You cannot remove your own account.')
+      setDeleteId(null)
+      return
+    }
     try {
       await usersApi.delete(deleteId)
       setDeleteId(null)
@@ -103,9 +109,44 @@ export default function Users() {
                     <td className="text-muted">{new Date(u.created_at).toLocaleDateString()}</td>
                     <td>
                       <div className="actions">
-                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(u)}>Edit</button>
-                        <button className="btn btn-danger btn-sm" onClick={() => setDeleteId(u.id)}
-                          disabled={u.id === me?.id}>Delete</button>
+                        {(() => {
+                          // Editing policy in UI:
+                          // - admin can edit anyone
+                          // - member can edit only themselves
+                          const canEdit = me && (me.role === 'admin' || u.id === me.id)
+                          return (
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => openEdit(u)}
+                              disabled={!canEdit}
+                              title={!canEdit ? 'Only admins can edit other users.' : ''}
+                            >
+                              Edit
+                            </button>
+                          )
+                        })()}
+                        {(() => {
+                          // Delete policy in UI:
+                          // - only admins can delete users
+                          // - self-delete is never allowed from this screen
+                          const canDelete = me && me.role === 'admin' && u.id !== me.id
+                          return (
+                            <button
+                              className="btn btn-danger btn-sm"
+                              onClick={() => setDeleteId(u.id)}
+                              disabled={!canDelete}
+                              title={
+                                u.id === me?.id
+                                  ? 'You cannot remove your own account.'
+                                  : !canDelete
+                                    ? 'Only admins can delete users.'
+                                    : ''
+                              }
+                            >
+                              Delete
+                            </button>
+                          )
+                        })()}
                       </div>
                     </td>
                   </tr>

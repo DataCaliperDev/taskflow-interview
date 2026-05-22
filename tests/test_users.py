@@ -61,22 +61,86 @@ def test_update_user_persists_the_change(client, test_user_token):
     assert response.status_code == 200
     # UC-12: verify the update actually applied — both in the PUT response…
     assert response.json()["username"] == "updateduser"
-    # Username changes invalidate old tokens because auth resolves `sub` to
-    # username in get_current_user(). Re-authenticate with the updated username
-    # and then verify persistence via /users/me.
+    # Session-stability requirement:
+    # existing token must remain valid after username change.
+    fresh = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    assert fresh["username"] == "updateduser"
+
+
+def test_username_change_does_not_break_existing_session(client, test_user_token):
+    """Regression test: old token should keep working after username update."""
+    me = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+
+    update = client.put(
+        f"/users/{me['id']}",
+        json={"username": "stable_session_user"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert update.status_code == 200
+
+    # Use the same pre-update token on a different protected endpoint too.
+    users = client.get(
+        "/users/",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert users.status_code == 200
+
+
+def test_admin_update_invalidates_target_user_session(client, admin_token):
+    """If admin updates another member's info, target's existing token is revoked."""
+    # Create an independent member account to avoid fixture-order ambiguity.
+    register = client.post(
+        "/auth/register",
+        json={
+            "username": "target_member",
+            "email": "target_member@example.com",
+            "password": "targetpass",
+        },
+    )
+    assert register.status_code == 200
+    target_user_id = register.json()["id"]
+
+    target_login = client.post(
+        "/auth/login",
+        data={"username": "target_member", "password": "targetpass"},
+    )
+    assert target_login.status_code == 200
+    target_old_token = target_login.json()["access_token"]
+
+    # Admin updates target user's profile.
+    update = client.put(
+        f"/users/{target_user_id}",
+        json={"email": "other-updated@example.com"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert update.status_code == 200
+    assert update.json()["email"] == "other-updated@example.com"
+
+    # Target user's old token should now be rejected.
+    old_token_me = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {target_old_token}"},
+    )
+    assert old_token_me.status_code == 401
+
+    # Target user can re-login and get a fresh working token.
     relogin = client.post(
         "/auth/login",
-        data={"username": "updateduser", "password": "testpass"},
+        data={"username": "target_member", "password": "targetpass"},
     )
     assert relogin.status_code == 200
     new_token = relogin.json()["access_token"]
-
-    # …and on a subsequent GET (persistence check).
-    fresh = client.get(
+    new_token_me = client.get(
         "/users/me",
         headers={"Authorization": f"Bearer {new_token}"},
-    ).json()
-    assert fresh["username"] == "updateduser"
+    )
+    assert new_token_me.status_code == 200
 
 
 # ── UC-12 · New coverage on /users endpoints ────────────────────────────────
