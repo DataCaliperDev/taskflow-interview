@@ -160,3 +160,121 @@ def test_admin_can_delete_other_users_task(client, test_user_token, admin_token)
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert response.status_code == 200
+
+
+# ── UC-5: /tasks/summary/by-user must not be N+1 ─────────────────────────────
+
+
+def _summary_response_is_well_formed(payload) -> None:
+    """Shared assertions on the summary endpoint's response schema."""
+    assert isinstance(payload, list)
+    for row in payload:
+        assert set(row.keys()) == {
+            "user_id",
+            "username",
+            "task_count",
+            "avg_priority_score",
+        }
+        assert isinstance(row["user_id"], int)
+        assert isinstance(row["username"], str)
+        assert isinstance(row["task_count"], int)
+        assert isinstance(row["avg_priority_score"], (int, float))
+
+
+def test_summary_by_user_preserves_response_schema(client, test_user_token):
+    response = client.get(
+        "/tasks/summary/by-user",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 200
+    _summary_response_is_well_formed(response.json())
+
+
+def test_summary_by_user_returns_correct_aggregates(client):
+    """Spot-check the maths: counts and averages must match what we created.
+
+    `calculate_priority_score(priority, status)`:
+        priority * 10 * {todo: 1, in_progress: 1.5, done: 0}
+
+    We register a brand-new user inside the test so the assertion can be
+    exact — other long-lived fixture users (testuser, other_user, admin_user)
+    accumulate tasks across the suite and would make a precise average
+    fragile.
+    """
+    client.post("/auth/register", json={
+        "username": "uc5_user",
+        "email": "uc5_user@example.com",
+        "password": "uc5pass",
+    })
+    login = client.post(
+        "/auth/login", data={"username": "uc5_user", "password": "uc5pass"}
+    )
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create three deterministic tasks with known scores.
+    # priority * 10 * status_multiplier
+    client.post(
+        "/tasks/",
+        json={"title": "uc5-A", "priority": 1, "status": "todo"},          # 10 * 1.0 = 10
+        headers=headers,
+    )
+    client.post(
+        "/tasks/",
+        json={"title": "uc5-B", "priority": 2, "status": "in_progress"},   # 20 * 1.5 = 30
+        headers=headers,
+    )
+    client.post(
+        "/tasks/",
+        json={"title": "uc5-C", "priority": 3, "status": "done"},          # 30 * 0   =  0
+        headers=headers,
+    )
+    # Expected: count=3, avg = (10 + 30 + 0) / 3 ≈ 13.33
+
+    response = client.get("/tasks/summary/by-user", headers=headers)
+    assert response.status_code == 200
+    rows = response.json()
+    _summary_response_is_well_formed(rows)
+
+    by_username = {row["username"]: row for row in rows}
+    assert "uc5_user" in by_username
+    me = by_username["uc5_user"]
+    assert me["task_count"] == 3
+    assert me["avg_priority_score"] == round((10 + 30 + 0) / 3, 2)
+
+
+def test_summary_by_user_avoids_n_plus_one(
+    client, test_user_token, other_user_token, admin_token, query_counter
+):
+    """The query count must be a small constant — NOT O(users).
+
+    Pre-fix (N+1): 1 SELECT for users + 1 SELECT per user for tasks.
+    Post-fix: 1 SELECT (LEFT OUTER JOIN), regardless of user count.
+
+    The fixtures above guarantee that at least three users exist
+    (testuser, other_user, admin_user), so a strict upper bound of `users / 2`
+    is impossible to satisfy with the old N+1 implementation and gives us a
+    sharp, deterministic signal.
+    """
+    headers = {"Authorization": f"Bearer {test_user_token}"}
+
+    with query_counter() as counter:
+        response = client.get("/tasks/summary/by-user", headers=headers)
+
+    assert response.status_code == 200
+    rows = response.json()
+
+    user_count = len(rows)
+    assert user_count >= 3, (
+        f"test pre-condition: need at least 3 users in the DB, found {user_count}"
+    )
+
+    # Tight upper bound: auth lookup (1) + the joinedload SELECT (1) = 2.
+    # Allow a tiny safety margin (e.g. SQLAlchemy emitting a transaction
+    # BEGIN as a separate statement on some dialects) but stay well below
+    # the N+1 floor of (1 + user_count).
+    assert counter["n"] <= 3, (
+        f"Endpoint issued {counter['n']} SQL queries for {user_count} users — "
+        f"expected ≤ 3 (a constant). The N+1 implementation would have issued "
+        f"{1 + user_count}."
+    )

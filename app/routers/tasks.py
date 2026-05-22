@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
 
 from app import models, schemas
@@ -120,20 +120,56 @@ def task_summary_by_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """Return each user's task count and average priority score."""
-    users = db.query(models.User).all()
-    result = []
+    """Return each user's task count and average priority score.
 
+    UC-5 — N+1 fix.
+
+    Original problem:
+        The previous implementation issued one SELECT to fetch all users and
+        then *one additional SELECT per user* to load that user's tasks. For
+        N users that is 1 + N round-trips to the database — a classic N+1
+        that scales linearly with row count and dominates latency once the
+        users table has any real size.
+
+    Fix:
+        Eager-load the `User.tasks` relationship with `joinedload`. SQLAlchemy
+        emits a single SELECT containing a LEFT OUTER JOIN between `users`
+        and `tasks`, hydrates each User with its `tasks` collection in one
+        round-trip, and we can iterate in pure Python without any further
+        I/O. Total queries: 1, regardless of N.
+
+    Trade-off considered:
+        A pure-SQL aggregation (GROUP BY user.id with COUNT and AVG over a
+        CASE expression for priority * status) would be even more efficient
+        at very large scales because it avoids transferring every task row.
+        Rejected for now because it would duplicate the
+        `calculate_priority_score` business rule as a SQL CASE — two
+        implementations of the same formula is a maintenance trap. If the
+        users-with-many-tasks workload ever becomes a bottleneck, the right
+        move is to push `calculate_priority_score` into a hybrid SQL
+        expression so both Python and SQL stay in sync, then switch this
+        endpoint to GROUP BY.
+
+    Response schema is unchanged.
+    """
+    users = (
+        db.query(models.User)
+        .options(joinedload(models.User.tasks))
+        .all()
+    )
+
+    result = []
     for user in users:
-        # Issue: N+1 query — one extra SELECT per user instead of a single JOIN/aggregation
-        tasks = db.query(models.Task).filter(models.Task.owner_id == user.id).all()
-        scores = [calculate_priority_score(t.priority, t.status) for t in tasks]
-        avg_score = sum(scores) / len(scores) if scores else 0   # Issue: ZeroDivisionError if len == 0 (handled here, but pattern is fragile)
+        scores = [
+            calculate_priority_score(t.priority, t.status) for t in user.tasks
+        ]
+        # Guard against empty task list — kept as in the original logic.
+        avg_score = sum(scores) / len(scores) if scores else 0
 
         result.append({
             "user_id": user.id,
             "username": user.username,
-            "task_count": len(tasks),
+            "task_count": len(user.tasks),
             "avg_priority_score": round(avg_score, 2),
         })
 

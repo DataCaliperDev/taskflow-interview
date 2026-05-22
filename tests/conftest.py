@@ -1,8 +1,10 @@
 # tests/conftest.py
 
+from contextlib import contextmanager
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.main import app
@@ -111,6 +113,30 @@ def admin_token(client):
     finally:
         db.close()
     return _login(client, "admin_user", "adminpass")
+
+
+# ── UC-5 helper ──────────────────────────────────────────────────────────────
+# Generic SQL-query counter used to prove the absence of N+1 patterns.
+# Hooks SQLAlchemy's `before_cursor_execute` event for the duration of the
+# context block and returns a dict with the running count.
+
+
+@pytest.fixture
+def query_counter():
+    @contextmanager
+    def _counter():
+        counter = {"n": 0}
+
+        def _on_execute(conn, cursor, statement, params, context, executemany):
+            counter["n"] += 1
+
+        event.listen(engine, "before_cursor_execute", _on_execute)
+        try:
+            yield counter
+        finally:
+            event.remove(engine, "before_cursor_execute", _on_execute)
+
+    return _counter
 
 
 # Issue: no fixture for DB teardown — test.db file persists after the suite runs
