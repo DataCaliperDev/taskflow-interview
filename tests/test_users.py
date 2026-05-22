@@ -239,6 +239,39 @@ def test_register_missing_required_fields(client):
     assert r.status_code == 422
     assert r.json()["detail"][0]["type"] == "missing"
 
+def test_register_invalid_password(client):
+    """Weak passwords must return 422 with the correct error message."""
+    EXPECTED_MSG = (
+        "Password must be at least 8 characters and contain at least one "
+        "uppercase letter, one lowercase letter, one number, and one symbol"
+    )
+
+    def _post(password):
+        return client.post("/auth/register", json={
+            "username": "pwtest", "email": "pwtest@example.com", "password": password,
+        })
+
+    def _msg(r):
+        # Pydantic v2 prefixes custom validator errors with "Value error, " — strip it
+        raw = r.json()["detail"][0]["msg"]
+        return raw.replace("Value error, ", "")
+
+    # Less than 8 characters
+    r = _post("Ab1!")
+    assert r.status_code == 422
+    assert _msg(r) == EXPECTED_MSG
+
+    # Missing uppercase letter
+    r = _post("abcdef1!")
+    assert r.status_code == 422
+    assert _msg(r) == EXPECTED_MSG
+
+    # Missing symbol
+    r = _post("Abcdef12")
+    assert r.status_code == 422
+    assert _msg(r) == EXPECTED_MSG
+
+
 # Issue: no test verifying that a normal user CANNOT update another user's profile
 # Issue: no test for the admin override header on DELETE
 # Issue: no test for get_user_tasks
