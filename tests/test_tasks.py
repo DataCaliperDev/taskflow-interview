@@ -204,10 +204,10 @@ def test_summary_by_user_returns_correct_aggregates(client):
     client.post("/auth/register", json={
         "username": "uc5_user",
         "email": "uc5_user@example.com",
-        "password": "uc5pass",
+        "password": "uc5passwd",  # UC-9: ≥ 8 chars
     })
     login = client.post(
-        "/auth/login", data={"username": "uc5_user", "password": "uc5pass"}
+        "/auth/login", data={"username": "uc5_user", "password": "uc5passwd"}
     )
     token = login.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -278,3 +278,119 @@ def test_summary_by_user_avoids_n_plus_one(
         f"expected ≤ 3 (a constant). The N+1 implementation would have issued "
         f"{1 + user_count}."
     )
+
+
+# ── UC-9: input validation on TaskCreate / TaskUpdate ────────────────────────
+# `status` is restricted to {todo, in_progress, done}; `priority` to [1, 3];
+# `title` must be ≥ 1 char. Each rule is exercised with one valid and one
+# invalid input, on both POST /tasks/ (create) and PUT /tasks/{id} (update),
+# so a partial-update bypass is caught too.
+
+
+import pytest  # noqa: E402  (kept local so we don't affect existing test order)
+
+
+def _auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_create_task_rejects_empty_title(client, test_user_token):
+    response = client.post(
+        "/tasks/",
+        json={"title": "", "priority": 2, "status": "todo"},
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 422
+    assert any("title" in err["loc"] for err in response.json()["detail"])
+
+
+def test_create_task_accepts_one_character_title(client, test_user_token):
+    response = client.post(
+        "/tasks/",
+        json={"title": "x", "priority": 2, "status": "todo"},
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("bad_status", ["", "TODO", "pending", "in progress", "  todo  "])
+def test_create_task_rejects_invalid_status(client, test_user_token, bad_status):
+    response = client.post(
+        "/tasks/",
+        json={"title": "valid", "priority": 2, "status": bad_status},
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 422
+    assert any("status" in err["loc"] for err in response.json()["detail"])
+
+
+@pytest.mark.parametrize("good_status", ["todo", "in_progress", "done"])
+def test_create_task_accepts_each_valid_status(client, test_user_token, good_status):
+    response = client.post(
+        "/tasks/",
+        json={"title": "valid", "priority": 2, "status": good_status},
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == good_status
+
+
+@pytest.mark.parametrize("bad_priority", [0, -1, 4, 99, 100])
+def test_create_task_rejects_out_of_range_priority(
+    client, test_user_token, bad_priority
+):
+    response = client.post(
+        "/tasks/",
+        json={"title": "valid", "priority": bad_priority, "status": "todo"},
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 422
+    assert any("priority" in err["loc"] for err in response.json()["detail"])
+
+
+@pytest.mark.parametrize("good_priority", [1, 2, 3])
+def test_create_task_accepts_each_valid_priority(
+    client, test_user_token, good_priority
+):
+    response = client.post(
+        "/tasks/",
+        json={"title": "valid", "priority": good_priority, "status": "todo"},
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 200
+    assert response.json()["priority"] == good_priority
+
+
+def test_update_task_rejects_invalid_status(client, test_user_token):
+    """Partial updates must enforce the same constraints as creation."""
+    task_id = _create_task_as(client, test_user_token, title="uc9-update-status")
+    response = client.put(
+        f"/tasks/{task_id}",
+        json={"status": "blocked"},  # not in the allowed set
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 422
+    assert any("status" in err["loc"] for err in response.json()["detail"])
+
+
+def test_update_task_rejects_invalid_priority(client, test_user_token):
+    task_id = _create_task_as(client, test_user_token, title="uc9-update-priority")
+    response = client.put(
+        f"/tasks/{task_id}",
+        json={"priority": 5},
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 422
+    assert any("priority" in err["loc"] for err in response.json()["detail"])
+
+
+def test_update_task_allows_partial_payload(client, test_user_token):
+    """Omitting a field must be allowed (no required-field error for unset keys)."""
+    task_id = _create_task_as(client, test_user_token, title="uc9-update-partial")
+    response = client.put(
+        f"/tasks/{task_id}",
+        json={"status": "in_progress"},  # only status — title/priority omitted
+        headers=_auth(test_user_token),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "in_progress"
