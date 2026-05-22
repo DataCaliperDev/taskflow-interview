@@ -63,6 +63,37 @@ def get_current_active_user(current_user=Depends(get_current_user)):
     return current_user
 
 
+# ── Authorization helpers (UC-3) ─────────────────────────────────────────────
+# Centralising these keeps the access-control policy in one place: every
+# router calls the same predicate, so "owner-or-admin" cannot drift between
+# routes and a future policy change only requires editing this file.
+
+def is_admin(user: models.User) -> bool:
+    return user.role == "admin"
+
+
+def require_admin(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    """Dependency: 403 unless the caller has role == 'admin'."""
+    if not is_admin(current_user):
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return current_user
+
+
+def require_owner_or_admin(
+    resource_owner_id: int, current_user: models.User
+) -> None:
+    """Allow the resource owner OR an admin; otherwise 403.
+
+    Not declared as a FastAPI dependency because it needs the resource's
+    owner id, which is only known after the resource is loaded from the DB.
+    """
+    if current_user.id == resource_owner_id or is_admin(current_user):
+        return
+    raise HTTPException(status_code=403, detail="Not authorized")
+
+
 # Issue: No rate limiting on the login endpoint — vulnerable to brute force
 @router.post("/login", response_model=schemas.Token)
 def login(

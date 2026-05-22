@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app import models, schemas
 from app.database import get_db
-from app.routers.auth import get_current_active_user
+from app.routers.auth import get_current_active_user, require_owner_or_admin
 from app.utils.helpers import calculate_priority_score, parse_tags
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -84,7 +84,9 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership check — any user can update any task
+    # UC-3: only the task's owner OR an admin may modify it.
+    require_owner_or_admin(task.owner_id, current_user)
+
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -104,7 +106,9 @@ def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership / admin check before deleting
+    # UC-3: only the task's owner OR an admin may delete it.
+    require_owner_or_admin(task.owner_id, current_user)
+
     db.delete(task)
     db.commit()
     # Issue: should return 204 No Content; returning a body with 200 is inconsistent
