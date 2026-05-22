@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const proxyTarget = process.env.VITE_PROXY_TARGET || 'http://localhost:8000'
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -11,7 +13,7 @@ export default defineConfig({
       // IMPORTANT: use /api prefix so frontend SPA routes such as /users
       // are not mistaken for backend endpoints on browser refresh.
       '/api': {
-        target: 'http://localhost:8000',
+        target: proxyTarget,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },

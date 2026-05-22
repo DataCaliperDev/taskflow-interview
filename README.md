@@ -52,6 +52,72 @@ python run.py
 - Interactive docs: http://localhost:8000/docs
 - OpenAPI schema: http://localhost:8000/openapi.json
 
+## Docker Implementation and Running Guide
+
+### Docker files in this project
+
+- `Dockerfile` - backend image (FastAPI + Uvicorn)
+- `frontend/Dockerfile` - frontend image (React + Vite dev server)
+- `docker-compose.yml` - multi-container setup for backend + frontend
+- `.dockerignore` and `frontend/.dockerignore` - smaller/faster Docker builds
+
+### Prerequisites
+
+- Docker Desktop installed and running
+- A local `.env` file in the project root (used by the backend service)
+
+If needed, create `.env` from the example:
+
+```bash
+cp .env.example .env
+```
+
+### Run with Docker Compose
+
+From the repository root:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+
+- `backend` on port `8000`
+- `frontend` on port `5173`
+
+### Access URLs
+
+- Frontend: http://localhost:5173
+- API: http://localhost:8000
+- API docs: http://localhost:8000/docs
+- Health check: http://localhost:8000/health
+
+### Useful commands
+
+Start in background:
+
+```bash
+docker compose up --build -d
+```
+
+View logs:
+
+```bash
+docker compose logs -f
+```
+
+Stop containers:
+
+```bash
+docker compose down
+```
+
+Stop and remove database volume (clean reset):
+
+```bash
+docker compose down -v
+```
+
 ## Test Coverage
 
 Run tests and print app-code coverage percentage:
