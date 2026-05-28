@@ -2,7 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import APP_NAME, APP_VERSION
+from app.config import settings
 from app.database import init_db
 from app.routers import auth, tasks, users
 
@@ -11,8 +11,8 @@ from app.routers import auth, tasks, users
 # Issue: CORS is wide-open (all origins allowed), fine for dev but dangerous in prod
 
 app = FastAPI(
-    title=APP_NAME,
-    version=APP_VERSION,
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
     description="A simple task management API for teams.",
 )
 
@@ -38,4 +38,4 @@ def on_startup():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "version": APP_VERSION}
+    return {"status": "ok", "version": settings.APP_VERSION}

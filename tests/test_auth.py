@@ -1,59 +1,58 @@
-# tests/test_auth.py
-
-"""
-Tests for the /auth endpoints.
-"""
+"""Tests for /auth (UC-12)."""
 
 
-def test_register(client):
-    response = client.post("/auth/register", json={
+def test_register_returns_201_and_no_password_hash(client):
+    resp = client.post("/auth/register", json={
         "username": "newuser",
         "email": "new@example.com",
-        "password": "pass",   # Issue: tests should not use trivially weak passwords — masks validation gaps
+        "password": "pw-min-8-chars",
     })
-    assert response.status_code == 200
-    # Issue: response includes password_hash — test doesn't assert this field is absent
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["username"] == "newuser"
+    assert body["email"] == "new@example.com"
+    assert body["role"] == "member"
+    assert body["is_active"] is True
+    assert "password_hash" not in body
+    assert "password" not in body
 
 
-def test_register_duplicate_email(client):
+def test_register_duplicate_email_rejected(client):
     client.post("/auth/register", json={
-        "username": "dupuser",
-        "email": "dup@example.com",
-        "password": "pass123",
-    })
-    response = client.post("/auth/register", json={
-        "username": "dupuser2",
-        "email": "dup@example.com",
-        "password": "pass456",
-    })
-    assert response.status_code == 400
+        "username": "dup1", "email": "dup@example.com", "password": "pw-1"})
+    resp = client.post("/auth/register", json={
+        "username": "dup2", "email": "dup@example.com", "password": "pw-2"})
+    assert resp.status_code == 400
+    assert "Email" in resp.json()["detail"]
 
 
-def test_login_success(client):
+def test_register_duplicate_username_rejected(client):
     client.post("/auth/register", json={
-        "username": "loginuser",
-        "email": "login@example.com",
-        "password": "mypassword",
-    })
-    response = client.post("/auth/login", data={
-        "username": "loginuser",
-        "password": "mypassword",
-    })
-    assert response.status_code == 200
-    assert "access_token" in response.json()
-    # Issue: doesn't assert token_type == "bearer"
-    # Issue: doesn't verify the token is actually a valid JWT
+        "username": "twin", "email": "a@example.com", "password": "pw-1"})
+    resp = client.post("/auth/register", json={
+        "username": "twin", "email": "b@example.com", "password": "pw-2"})
+    assert resp.status_code == 400
+    assert "Username" in resp.json()["detail"]
 
 
-def test_login_wrong_password(client):
-    response = client.post("/auth/login", data={
-        "username": "loginuser",
-        "password": "wrongpassword",
-    })
-    assert response.status_code == 401
+def test_login_success(client, seeded_users):
+    resp = client.post("/auth/login", data={"username": "bob", "password": "bob123"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["token_type"] == "bearer"
+    assert isinstance(body["access_token"], str) and body["access_token"].count(".") == 2
 
 
-# Issue: no test for accessing a protected route without a token
-# Issue: no test for accessing a protected route with an expired token
-# Issue: no test for registering with a missing field (e.g., no email)
-# Issue: no test for duplicate username registration
+def test_login_wrong_password(client, seeded_users):
+    resp = client.post("/auth/login", data={"username": "bob", "password": "wrong"})
+    assert resp.status_code == 401
+
+
+def test_login_unknown_user(client):
+    resp = client.post("/auth/login", data={"username": "ghost", "password": "x"})
+    assert resp.status_code == 401
+
+
+def test_protected_route_requires_token(client):
+    resp = client.get("/users/")
+    assert resp.status_code == 401
