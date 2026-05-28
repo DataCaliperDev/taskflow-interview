@@ -11,8 +11,13 @@ function formatDate(dt) {
   return new Date(dt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+const PAGE_SIZE = 10
+
 export default function Tasks() {
   const [tasks, setTasks] = useState([])
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(0)
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
@@ -26,21 +31,30 @@ export default function Tasks() {
     setLoading(true)
     setError('')
     try {
-      let data
       if (searchQ.trim()) {
-        data = await tasksApi.search(searchQ.trim())
+        const data = await tasksApi.search(searchQ.trim())
+        setTasks(data)
+        setTotal(data.length)
+        setTotalPages(0)
       } else {
-        data = await tasksApi.list(filterStatus ? { status: filterStatus } : {})
+        const params = { page, page_size: PAGE_SIZE }
+        if (filterStatus) params.status = filterStatus
+        const data = await tasksApi.list(params)
+        setTasks(data.items)
+        setTotal(data.total)
+        setTotalPages(data.total_pages)
       }
-      setTasks(data)
     } catch (err) {
       setError(err.message)
     } finally {
       setLoading(false)
     }
-  }, [filterStatus, searchQ])
+  }, [filterStatus, searchQ, page])
 
   useEffect(() => { fetchTasks() }, [fetchTasks])
+
+  // Reset to page 1 whenever the filter or search changes.
+  useEffect(() => { setPage(1) }, [filterStatus, searchQ])
 
   async function handleSave(payload) {
     if (modalTask?.id) {
@@ -76,7 +90,7 @@ export default function Tasks() {
   }
 
   const stats = {
-    total: tasks.length,
+    total: searchQ ? tasks.length : total,
     todo: tasks.filter(t => t.status === 'todo').length,
     in_progress: tasks.filter(t => t.status === 'in_progress').length,
     done: tasks.filter(t => t.status === 'done').length,
@@ -178,6 +192,17 @@ export default function Tasks() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {!searchQ && totalPages > 1 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+            <span className="text-muted" style={{ fontSize: 13 }}>
+              Page {page} of {totalPages} · {total} total
+            </span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-ghost btn-sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>← Prev</button>
+              <button className="btn btn-ghost btn-sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>Next →</button>
+            </div>
           </div>
         )}
       </div>

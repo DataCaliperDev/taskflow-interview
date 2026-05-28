@@ -1,8 +1,9 @@
 # app/routers/users.py
 
+import math
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Header
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
 from app.database import get_db
@@ -84,9 +85,11 @@ def delete_user(
     return {"message": "User deleted"}
 
 
-@router.get("/{user_id}/tasks", response_model=List[schemas.TaskOut])
+@router.get("/{user_id}/tasks", response_model=schemas.TaskPage)
 def get_user_tasks(
     user_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
@@ -94,6 +97,24 @@ def get_user_tasks(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Issue: N+1 — each task's comments will be lazy-loaded separately
-    # Issue: No pagination — could return thousands of tasks
-    return user.tasks
+    query = (
+        db.query(models.Task)
+        .options(selectinload(models.Task.comments))
+        .filter(models.Task.owner_id == user_id)
+    )
+    total = query.order_by(None).count()
+    items = (
+        query.order_by(models.Task.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    total_pages = math.ceil(total / page_size) if total else 0
+
+    return schemas.TaskPage(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
