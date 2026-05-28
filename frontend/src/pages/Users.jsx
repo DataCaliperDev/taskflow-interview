@@ -3,6 +3,25 @@ import { useState, useEffect } from 'react'
 import { usersApi } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
+/**
+ * Parse an API error into a list of human-readable strings.
+ * Pydantic 422: detail is a JSON array → extract each `msg`, strip "Value error, " prefix.
+ * Other errors (400, 403, …): detail is a plain string → wrap in array.
+ */
+function parseErrors(errMessage) {
+  try {
+    const parsed = JSON.parse(errMessage)
+    if (Array.isArray(parsed)) {
+      return parsed.map(e =>
+        (e.msg || String(e)).replace(/^Value error,\s*/i, '')
+      )
+    }
+  } catch {
+    // not JSON — fall through
+  }
+  return [errMessage]
+}
+
 export default function Users() {
   const { user: me } = useAuth()
   const [users, setUsers] = useState([])
@@ -11,7 +30,10 @@ export default function Users() {
   const [editUser, setEditUser] = useState(null)
   const [editForm, setEditForm] = useState({ username: '', email: '', password: '' })
   const [saveLoading, setSaveLoading] = useState(false)
+  const [saveErrors, setSaveErrors] = useState([])
   const [deleteId, setDeleteId] = useState(null)
+  const [deleteError, setDeleteError] = useState('')
+  const [deleteLoading, setDeleteLoading] = useState(false)
 
   useEffect(() => { fetchUsers() }, [])
 
@@ -29,32 +51,52 @@ export default function Users() {
   function openEdit(u) {
     setEditUser(u)
     setEditForm({ username: u.username, email: u.email, password: '' })
+    setSaveErrors([])
+  }
+
+  function closeEdit() {
+    setEditUser(null)
+    setSaveErrors([])
   }
 
   async function handleSave(e) {
     e.preventDefault()
+    setSaveErrors([])
     setSaveLoading(true)
     try {
       const payload = { username: editForm.username, email: editForm.email }
       if (editForm.password) payload.password = editForm.password
       await usersApi.update(editUser.id, payload)
-      setEditUser(null)
+      closeEdit()
       fetchUsers()
     } catch (err) {
-      setError(err.message)
+      setSaveErrors(parseErrors(err.message))
     } finally {
       setSaveLoading(false)
     }
   }
 
+  function openDelete(id) {
+    setDeleteId(id)
+    setDeleteError('')
+  }
+
+  function closeDelete() {
+    setDeleteId(null)
+    setDeleteError('')
+  }
+
   async function handleDelete() {
+    setDeleteLoading(true)
+    setDeleteError('')
     try {
       await usersApi.delete(deleteId)
       setDeleteId(null)
       fetchUsers()
     } catch (err) {
-      setError(err.message)
-      setDeleteId(null)
+      setDeleteError(err.message)
+    } finally {
+      setDeleteLoading(false)
     }
   }
 
@@ -103,9 +145,16 @@ export default function Users() {
                     <td className="text-muted">{new Date(u.created_at).toLocaleDateString()}</td>
                     <td>
                       <div className="actions">
-                        <button className="btn btn-ghost btn-sm" onClick={() => openEdit(u)}>Edit</button>
-                        <button className="btn btn-danger btn-sm" onClick={() => setDeleteId(u.id)}
-                          disabled={u.id === me?.id}>Delete</button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => openEdit(u)}
+                          disabled={me?.role !== 'admin' && u.id !== me?.id}
+                        >Edit</button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          onClick={() => openDelete(u.id)}
+                          disabled={me?.role !== 'admin'}
+                        >Delete</button>
                       </div>
                     </td>
                   </tr>
@@ -118,7 +167,7 @@ export default function Users() {
 
       {/* Edit modal */}
       {editUser && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setEditUser(null)}>
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && closeEdit()}>
           <div className="modal">
             <div className="modal-title">Edit User</div>
             <form onSubmit={handleSave}>
@@ -137,8 +186,18 @@ export default function Users() {
                 <input className="form-control" type="password" value={editForm.password}
                   onChange={e => setEditForm(f => ({ ...f, password: e.target.value }))} placeholder="••••••••" />
               </div>
+              {saveErrors.length > 0 && (
+                <div className="alert alert-error" style={{ marginTop: 8, fontSize: 13 }}>
+                  {saveErrors.length === 1
+                    ? saveErrors[0]
+                    : <ul style={{ margin: 0, paddingLeft: 18 }}>
+                        {saveErrors.map((msg, i) => <li key={i}>{msg}</li>)}
+                      </ul>
+                  }
+                </div>
+              )}
               <div className="modal-footer">
-                <button type="button" className="btn btn-ghost" onClick={() => setEditUser(null)}>Cancel</button>
+                <button type="button" className="btn btn-ghost" onClick={closeEdit} disabled={saveLoading}>Cancel</button>
                 <button type="submit" className="btn btn-primary" disabled={saveLoading}>
                   {saveLoading ? <span className="spinner" /> : 'Save changes'}
                 </button>
@@ -154,9 +213,14 @@ export default function Users() {
           <div className="modal" style={{ maxWidth: 360 }}>
             <div className="modal-title">Delete user?</div>
             <p style={{ color: 'var(--muted)', fontSize: 14 }}>All their tasks will remain but be unowned.</p>
+            {deleteError && (
+              <div className="alert alert-error" style={{ marginTop: 12, fontSize: 13 }}>{deleteError}</div>
+            )}
             <div className="modal-footer">
-              <button className="btn btn-ghost" onClick={() => setDeleteId(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={handleDelete}>Delete</button>
+              <button className="btn btn-ghost" onClick={closeDelete} disabled={deleteLoading}>Cancel</button>
+              <button className="btn btn-danger" onClick={handleDelete} disabled={deleteLoading}>
+                {deleteLoading ? <span className="spinner" /> : 'Delete'}
+              </button>
             </div>
           </div>
         </div>

@@ -1,8 +1,11 @@
 # app/schemas.py
 
-from pydantic import BaseModel
+import re
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, List
 from datetime import datetime
+
+from app.config import VALID_PRIORITIES, VALID_STATUSES
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -20,22 +23,48 @@ class TokenData(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
-    email: str
+    email: EmailStr
     password: str
-    # Issue: no field-level validation — no min length, no email format check, no password strength
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        pattern = re.compile(
+            r"^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$"
+        )
+        if not pattern.match(v):
+            raise ValueError(
+                "Password must be at least 8 characters and contain at least one "
+                "uppercase letter, one lowercase letter, one number, and one symbol"
+            )
+        return v
 
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
     password: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        pattern = re.compile(
+            r"^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$"
+        )
+        if not pattern.match(v):
+            raise ValueError(
+                "Password must be at least 8 characters and contain at least one "
+                "uppercase letter, one lowercase letter, one number, and one symbol"
+            )
+        return v
 
 
 class UserOut(BaseModel):
     id: int
     username: str
     email: str
-    password_hash: str   # Issue: password hash is exposed in the response schema
     is_active: bool
     role: str
     created_at: datetime
@@ -77,8 +106,20 @@ class TaskCreate(BaseModel):
     priority: Optional[int] = 2
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
-    # Issue: no validation that status is one of the valid values
-    # Issue: no validation that priority is 1, 2, or 3
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        if v not in VALID_STATUSES:
+            raise ValueError(f"status must be one of {VALID_STATUSES}, got '{v}'")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: int) -> int:
+        if v not in VALID_PRIORITIES:
+            raise ValueError(f"priority must be one of {VALID_PRIORITIES}, got {v}")
+        return v
 
 
 class TaskUpdate(BaseModel):
@@ -88,6 +129,20 @@ class TaskUpdate(BaseModel):
     priority: Optional[int] = None
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_STATUSES:
+            raise ValueError(f"status must be one of {VALID_STATUSES}, got '{v}'")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v not in VALID_PRIORITIES:
+            raise ValueError(f"priority must be one of {VALID_PRIORITIES}, got {v}")
+        return v
 
 
 class TaskOut(BaseModel):

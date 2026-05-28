@@ -8,14 +8,10 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.database import Base, get_db
 
-# Issue: uses a separate in-memory DB, but does not reset between individual tests
-# — tests that mutate data will bleed state into later tests
 TEST_DATABASE_URL = "sqlite:///./test.db"
 
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base.metadata.create_all(bind=engine)
 
 
 def override_get_db():
@@ -29,13 +25,21 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-@pytest.fixture(scope="module")  # Issue: module scope means DB state leaks between tests
+@pytest.fixture(scope="function")
 def client():
+    # Drop all tables and recreate them before each test — guarantees a clean slate
+    # and prevents state from one test leaking into the next.
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
     with TestClient(app) as c:
         yield c
 
+    # Teardown: drop all tables after the test so test.db contains no residual rows.
+    Base.metadata.drop_all(bind=engine)
 
-@pytest.fixture(scope="module")
+
+@pytest.fixture(scope="function")
 def test_user_token(client):
     """Register and log in a test user, returning a bearer token."""
     client.post("/auth/register", json={
@@ -48,6 +52,3 @@ def test_user_token(client):
         data={"username": "testuser", "password": "testpass"},
     )
     return response.json()["access_token"]
-
-
-# Issue: no fixture for DB teardown — test.db file persists after the suite runs
