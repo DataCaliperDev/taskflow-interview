@@ -45,15 +45,42 @@ def get_current_user(
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
+        subject: str = payload.get("sub")
+        if subject is None:
             raise credentials_exception
+        token_version_claim = payload.get("tv")
     except JWTError:
         raise credentials_exception
 
-    user = db.query(models.User).filter(models.User.username == username).first()
+    # Session-stability fix:
+    # New tokens store stable user id in `sub` so username changes do not
+    # invalidate existing sessions. For backward compatibility during rollout,
+    # accept legacy username-based tokens as fallback.
+    user = None
+    if str(subject).isdigit():
+        user = (
+            db.query(models.User)
+            .filter(models.User.id == int(subject))
+            .first()
+        )
+    if user is None:
+        user = (
+            db.query(models.User)
+            .filter(models.User.username == subject)
+            .first()
+        )
     if user is None:
         raise credentials_exception
+
+    # Token-version check (session invalidation):
+    # if claim exists and does not match current user token_version, reject.
+    # Legacy tokens without `tv` stay valid for backward compatibility.
+    if token_version_claim is not None:
+        try:
+            if int(token_version_claim) != int(user.token_version):
+                raise credentials_exception
+        except (TypeError, ValueError):
+            raise credentials_exception
     return user
 
 
@@ -61,6 +88,37 @@ def get_current_active_user(current_user=Depends(get_current_user)):
     if not current_user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
+
+
+# ── Authorization helpers (UC-3) ─────────────────────────────────────────────
+# Centralising these keeps the access-control policy in one place: every
+# router calls the same predicate, so "owner-or-admin" cannot drift between
+# routes and a future policy change only requires editing this file.
+
+def is_admin(user: models.User) -> bool:
+    return user.role == "admin"
+
+
+def require_admin(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    """Dependency: 403 unless the caller has role == 'admin'."""
+    if not is_admin(current_user):
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return current_user
+
+
+def require_owner_or_admin(
+    resource_owner_id: int, current_user: models.User
+) -> None:
+    """Allow the resource owner OR an admin; otherwise 403.
+
+    Not declared as a FastAPI dependency because it needs the resource's
+    owner id, which is only known after the resource is loaded from the DB.
+    """
+    if current_user.id == resource_owner_id or is_admin(current_user):
+        return
+    raise HTTPException(status_code=403, detail="Not authorized")
 
 
 # Issue: No rate limiting on the login endpoint — vulnerable to brute force
@@ -82,7 +140,7 @@ def login(
         )
 
     token = create_access_token(
-        data={"sub": user.username},
+        data={"sub": str(user.id), "tv": int(user.token_version)},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     return {"access_token": token, "token_type": "bearer"}

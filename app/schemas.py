@@ -1,8 +1,15 @@
 # app/schemas.py
 
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from typing import Optional, List, Literal
 from datetime import datetime
+
+
+# UC-9: shared type aliases keep the allowed values in one place so the
+# constraint is identical on every endpoint that consumes a task status or
+# priority. Updating the allowed set is a one-line change here.
+TaskStatus = Literal["todo", "in_progress", "done"]
+TaskPriority = int  # constrained at field level via Field(ge=1, le=3)
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -19,37 +26,43 @@ class TokenData(BaseModel):
 # ── User ─────────────────────────────────────────────────────────────────────
 
 class UserCreate(BaseModel):
-    username: str
-    email: str
-    password: str
-    # Issue: no field-level validation — no min length, no email format check, no password strength
+    # UC-9: enforce minimum lengths and a real email format at the schema
+    # boundary so bad inputs are rejected before they reach the database or
+    # auth code paths.
+    username: str = Field(min_length=3, description="At least 3 characters")
+    email: EmailStr
+    password: str = Field(min_length=8, description="At least 8 characters")
 
 
 class UserUpdate(BaseModel):
-    username: Optional[str] = None
-    email: Optional[str] = None
-    password: Optional[str] = None
+    # UC-9: same constraints as UserCreate, but every field is optional so
+    # callers can patch a subset. Omitting a field is fine; providing an
+    # invalid value is not — otherwise PUT /users/{id} becomes a bypass for
+    # the create-time rules.
+    username: Optional[str] = Field(default=None, min_length=3)
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(default=None, min_length=8)
 
 
 class UserOut(BaseModel):
+    # password_hash is intentionally NOT exposed here (UC-2). Every
+    # user-facing endpoint serialises through UserOut, so removing the
+    # field at the schema level guarantees it cannot leak from any route.
     id: int
     username: str
     email: str
-    password_hash: str   # Issue: password hash is exposed in the response schema
     is_active: bool
     role: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserSummary(BaseModel):
     id: int
     username: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Comment ───────────────────────────────────────────────────────────────────
@@ -64,28 +77,30 @@ class CommentOut(BaseModel):
     author_id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Task ──────────────────────────────────────────────────────────────────────
 
 class TaskCreate(BaseModel):
-    title: str
+    # UC-9: title must be non-empty; status and priority are constrained at
+    # the type level so any other value triggers a 422 with a clear message
+    # listing the allowed values (status) or the permitted range (priority).
+    title: str = Field(min_length=1, description="Must not be empty")
     description: Optional[str] = None
-    status: Optional[str] = "todo"
-    priority: Optional[int] = 2
+    status: TaskStatus = "todo"
+    priority: int = Field(default=2, ge=1, le=3, description="1 (low) – 3 (high)")
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
-    # Issue: no validation that status is one of the valid values
-    # Issue: no validation that priority is 1, 2, or 3
 
 
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
+    # UC-9: partial updates — every field is optional, but supplied values
+    # still go through the same constraints as TaskCreate.
+    title: Optional[str] = Field(default=None, min_length=1)
     description: Optional[str] = None
-    status: Optional[str] = None
-    priority: Optional[int] = None
+    status: Optional[TaskStatus] = None
+    priority: Optional[int] = Field(default=None, ge=1, le=3)
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
 
@@ -102,5 +117,4 @@ class TaskOut(BaseModel):
     tags: Optional[str]
     comments: List[CommentOut] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

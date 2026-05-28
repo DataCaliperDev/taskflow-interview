@@ -1,6 +1,6 @@
 // src/context/AuthContext.jsx
 import { createContext, useContext, useState, useEffect } from 'react'
-import { usersApi } from '../api/client'
+import { usersApi, ApiAuthError } from '../api/client'
 
 const AuthContext = createContext(null)
 
@@ -13,7 +13,18 @@ export function AuthProvider({ children }) {
     if (token) {
       usersApi.me()
         .then(setUser)
-        .catch(() => localStorage.removeItem('token'))
+        .catch((err) => {
+          // Expired/invalid token => clear local auth and let RequireAuth
+          // route guard redirect to /login within SPA.
+          if (err instanceof ApiAuthError) {
+            localStorage.removeItem('token')
+            setUser(null)
+            return
+          }
+          // For non-auth errors, keep the token and surface a clean logged-out
+          // fallback to avoid broken app shell.
+          setUser(null)
+        })
         .finally(() => setLoading(false))
     } else {
       setLoading(false)

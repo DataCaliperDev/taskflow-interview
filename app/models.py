@@ -14,6 +14,9 @@ class User(Base):
     username = Column(String(50), unique=True)
     email = Column(String(100), unique=True)
     password_hash = Column(String(255))
+    # Session invalidation knob:
+    # increment this to invalidate all previously issued JWTs for the user.
+    token_version = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True)
     role = Column(String(20), default="member")  # "admin" or "member"
     created_at = Column(DateTime(timezone=True), server_default=func.now())

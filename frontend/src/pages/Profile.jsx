@@ -4,7 +4,7 @@ import { usersApi } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
 export default function Profile() {
-  const { user, login } = useAuth()
+  const { user } = useAuth()
   const [form, setForm] = useState({ username: user?.username || '', email: user?.email || '', password: '' })
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState('')

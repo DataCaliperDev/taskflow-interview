@@ -1,12 +1,16 @@
 # app/routers/users.py
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.database import get_db
-from app.routers.auth import get_current_active_user, hash_password
+from app.routers.auth import (
+    get_current_active_user,
+    hash_password,
+    require_owner_or_admin,
+)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -45,17 +49,28 @@ def update_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    # Issue: any authenticated user can update any other user's profile
+    # UC-3 parity: owner or admin only.
+    require_owner_or_admin(user_id, current_user)
+
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    update_applied = False
     if user_data.username:
         user.username = user_data.username
+        update_applied = True
     if user_data.email:
         user.email = user_data.email
+        update_applied = True
     if user_data.password:
         user.password_hash = hash_password(user_data.password)
+        update_applied = True
+
+    # If someone updates another user's profile, force that user to re-auth by
+    # bumping token_version. Existing JWTs for that user become invalid.
+    if update_applied and current_user.id != user.id:
+        user.token_version += 1
 
     db.commit()
     db.refresh(user)
@@ -65,15 +80,12 @@ def update_user(
 @router.delete("/{user_id}")
 def delete_user(
     user_id: int,
-    x_admin_override: str = Header(default=None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    # Issue: admin check via a custom header value instead of role-based access control
-    # Any caller who knows the magic string can delete any user
-    if x_admin_override != "admin-secret-2024":
-        if current_user.id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+    # UC-3: replace the X-Admin-Override magic-string check with real RBAC.
+    # A user may delete themselves; otherwise the caller must be an admin.
+    require_owner_or_admin(user_id, current_user)
 
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
