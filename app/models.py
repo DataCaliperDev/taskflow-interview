@@ -9,10 +9,9 @@ from app.database import Base
 class User(Base):
     __tablename__ = "users"
 
-    # Issue: no index on `email` despite being used as lookup key
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True)
-    email = Column(String(100), unique=True)
+    email = Column(String(100), unique=True, index=True)
     password_hash = Column(String(255))
     is_active = Column(Boolean, default=True)
     role = Column(String(20), default="member")  # "admin" or "member"
@@ -28,10 +27,9 @@ class Task(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200))
     description = Column(Text, nullable=True)
-    status = Column(String(20), default="todo")   # todo | in_progress | done
+    status = Column(String(20), default="todo", index=True)   # todo | in_progress | done
     priority = Column(Integer, default=2)          # 1=low, 2=medium, 3=high
-    owner_id = Column(Integer, ForeignKey("users.id"))
-    # Issue: no index on `status` and `owner_id` which are heavily filtered on
+    owner_id = Column(Integer, ForeignKey("users.id"), index=True)
     # Issue: no `updated_at` column for tracking modifications
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     due_date = Column(DateTime(timezone=True), nullable=True)

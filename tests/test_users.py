@@ -1,51 +1,74 @@
-# tests/test_users.py
+def test_get_me_hides_password_hash(client, auth_headers):
+    headers, _ = auth_headers()
 
-"""
-Tests for the /users endpoints.
-"""
+    response = client.get("/users/me", headers=headers)
 
-
-def test_get_me(client, test_user_token):
-    response = client.get(
-        "/users/me",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    )
     assert response.status_code == 200
     data = response.json()
     assert "username" in data
-    # Issue: does not assert that password_hash is NOT in the response
+    assert "password_hash" not in data
 
 
-def test_list_users_authenticated(client, test_user_token):
-    response = client.get(
-        "/users/",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    )
+def test_list_users_hides_password_hash(client, auth_headers, make_user):
+    headers, _ = auth_headers()
+    make_user(username="other")
+
+    response = client.get("/users/", headers=headers)
+
     assert response.status_code == 200
+    assert response.json()
+    assert all("password_hash" not in user for user in response.json())
 
 
 def test_list_users_unauthenticated(client):
     response = client.get("/users/")
-    # Issue: test expects 401, which is correct — but it only checks the code, not the error message
+
     assert response.status_code == 401
 
 
-def test_update_user(client, test_user_token):
-    # First get our own id
-    me = client.get(
-        "/users/me",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    ).json()
+def test_user_can_update_own_profile(client, auth_headers):
+    headers, user = auth_headers()
 
     response = client.put(
-        f"/users/{me['id']}",
+        f"/users/{user.id}",
         json={"username": "updateduser"},
-        headers={"Authorization": f"Bearer {test_user_token}"},
+        headers=headers,
     )
+
     assert response.status_code == 200
-    # Issue: no assertion that username was actually changed to "updateduser"
+    assert response.json()["username"] == "updateduser"
+    assert "password_hash" not in response.json()
 
 
-# Issue: no test verifying that a normal user CANNOT update another user's profile
-# Issue: no test for the admin override header on DELETE
-# Issue: no test for get_user_tasks
+def test_member_cannot_update_another_user(client, auth_headers):
+    headers, _ = auth_headers(username="member")
+    _, other = auth_headers(username="other")
+
+    response = client.put(
+        f"/users/{other.id}",
+        json={"username": "blockedupdate"},
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+
+
+def test_member_cannot_delete_another_user_with_admin_override_header(
+    client, auth_headers
+):
+    headers, _ = auth_headers(username="member")
+    _, other = auth_headers(username="other")
+    headers_with_override = {**headers, "X-Admin-Override": "admin-secret-2024"}
+
+    response = client.delete(f"/users/{other.id}", headers=headers_with_override)
+
+    assert response.status_code == 403
+
+
+def test_admin_can_delete_another_user(client, auth_headers):
+    admin_headers, _ = auth_headers(username="admin", role="admin")
+    _, other = auth_headers(username="other")
+
+    response = client.delete(f"/users/{other.id}", headers=admin_headers)
+
+    assert response.status_code == 200
