@@ -1,11 +1,12 @@
-# app/schemas.py
-
-from pydantic import BaseModel
-from typing import Optional, List
 from datetime import datetime
+from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
-# ── Auth ────────────────────────────────────────────────────────────────────
+VALID_STATUSES = {"todo", "in_progress", "done"}
+VALID_PRIORITIES = {1, 2, 3}
+
 
 class Token(BaseModel):
     access_token: str
@@ -16,43 +17,35 @@ class TokenData(BaseModel):
     username: Optional[str] = None
 
 
-# ── User ─────────────────────────────────────────────────────────────────────
-
 class UserCreate(BaseModel):
-    username: str
-    email: str
-    password: str
-    # Issue: no field-level validation — no min length, no email format check, no password strength
+    username: str = Field(..., min_length=3)
+    email: EmailStr
+    password: str = Field(..., min_length=8)
 
 
 class UserUpdate(BaseModel):
-    username: Optional[str] = None
-    email: Optional[str] = None
-    password: Optional[str] = None
+    username: Optional[str] = Field(default=None, min_length=3)
+    email: Optional[EmailStr] = None
+    password: Optional[str] = Field(default=None, min_length=8)
 
 
 class UserOut(BaseModel):
     id: int
     username: str
     email: str
-    password_hash: str   # Issue: password hash is exposed in the response schema
     is_active: bool
     role: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserSummary(BaseModel):
     id: int
     username: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
-
-# ── Comment ───────────────────────────────────────────────────────────────────
 
 class CommentCreate(BaseModel):
     content: str
@@ -64,30 +57,53 @@ class CommentOut(BaseModel):
     author_id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
-
-# ── Task ──────────────────────────────────────────────────────────────────────
 
 class TaskCreate(BaseModel):
-    title: str
+    title: str = Field(..., min_length=1)
     description: Optional[str] = None
     status: Optional[str] = "todo"
     priority: Optional[int] = 2
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
-    # Issue: no validation that status is one of the valid values
-    # Issue: no validation that priority is 1, 2, or 3
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in VALID_STATUSES:
+            raise ValueError("status must be one of: todo, in_progress, done")
+        return value
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value not in VALID_PRIORITIES:
+            raise ValueError("priority must be one of: 1, 2, 3")
+        return value
 
 
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, min_length=1)
     description: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[int] = None
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and value not in VALID_STATUSES:
+            raise ValueError("status must be one of: todo, in_progress, done")
+        return value
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value not in VALID_PRIORITIES:
+            raise ValueError("priority must be one of: 1, 2, 3")
+        return value
 
 
 class TaskOut(BaseModel):
@@ -100,7 +116,6 @@ class TaskOut(BaseModel):
     created_at: datetime
     due_date: Optional[datetime]
     tags: Optional[str]
-    comments: List[CommentOut] = []
+    comments: List[CommentOut] = Field(default_factory=list)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
