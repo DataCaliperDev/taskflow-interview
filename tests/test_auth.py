@@ -84,3 +84,59 @@ def test_protected_route_without_token(client):
     """A protected route returns 401 when no bearer token is supplied."""
     response = client.get("/users/me")
     assert response.status_code == 401
+
+
+# ── UC-1: bcrypt password hashing ─────────────────────────────────────────────
+
+def test_stored_hash_is_bcrypt(client, db):
+    """The password stored on registration is a bcrypt hash ($2b$), not the
+    plaintext (and not the old 32-char MD5 hex).
+
+    The stored hash is read directly from the shared in-memory DB session rather
+    than from ``/users/me``, so this end-to-end check does not depend on
+    ``UserOut`` leaking ``password_hash`` over the API.
+    """
+    from app import models
+
+    plaintext = "supersecret1"
+    register = client.post("/auth/register", json={
+        "username": "bcryptuser",
+        "email": "bcrypt@example.com",
+        "password": plaintext,
+    })
+    assert register.status_code == 200
+
+    user = (
+        db.query(models.User)
+        .filter(models.User.username == "bcryptuser")
+        .first()
+    )
+    stored = user.password_hash
+    assert stored.startswith("$2b$")
+    assert plaintext not in stored
+
+
+def test_hash_password_starts_with_2b():
+    """hash_password produces a bcrypt $2b$ hash that omits the plaintext."""
+    from app.routers.auth import hash_password
+
+    plaintext = "anothersecret1"
+    hashed = hash_password(plaintext)
+    assert hashed.startswith("$2b$")
+    assert plaintext not in hashed
+
+
+def test_hash_password_is_salted():
+    """Hashing the same password twice yields different hashes (random salt)."""
+    from app.routers.auth import hash_password
+
+    assert hash_password("samepassword1") != hash_password("samepassword1")
+
+
+def test_verify_password_roundtrip():
+    """verify_password is True for the correct password and False otherwise."""
+    from app.routers.auth import hash_password, verify_password
+
+    hashed = hash_password("correcthorse1")
+    assert verify_password("correcthorse1", hashed) is True
+    assert verify_password("wrongpassword1", hashed) is False
