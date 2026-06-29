@@ -25,9 +25,8 @@ taskflow/
 │   ├── test_tasks.py
 │   └── test_users.py
 ├── scripts/
-│   └── seed_data.py       # Seed DB with sample data
-├── TASKS.md               # Candidate use cases
-├── EVALUATOR_GUIDE.md     # Interviewer reference (do not share with candidates)
+│   ├── seed_data.py       # Seed DB with sample data
+│   └── migrate_tags.py    # Migrate legacy comma-separated tags to the Tag table
 ├── requirements.txt
 ├── .env.example
 └── run.py

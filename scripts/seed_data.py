@@ -2,24 +2,35 @@
 
 import sys
 import os
+from datetime import datetime, timezone, timedelta
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal, init_db
-from app.models import User, Task, Comment
+from app.models import User, Task, Comment, Tag
 from app.routers.auth import hash_password
-from datetime import datetime, timedelta
 
 init_db()
 
 db = SessionLocal()
 
-# Clear existing data
 db.query(Comment).delete()
-db.query(Task).delete()
+db.execute(Task.__table__.delete())
+db.query(Tag).delete()
 db.query(User).delete()
 db.commit()
 
-# Create users
+
+def get_tag(name, cache):
+    if name not in cache:
+        cache[name] = Tag(name=name)
+        db.add(cache[name])
+    return cache[name]
+
+
+now = datetime.now(timezone.utc)
+tag_cache = {}
+
 alice = User(username="alice", email="alice@example.com",
              password_hash=hash_password("alice123"), role="admin")
 bob = User(username="bob", email="bob@example.com",
@@ -30,20 +41,23 @@ carol = User(username="carol", email="carol@example.com",
 db.add_all([alice, bob, carol])
 db.commit()
 
-# Create tasks
 tasks_data = [
     Task(title="Set up CI/CD pipeline", description="Configure GitHub Actions for automated testing.",
          status="in_progress", priority=3, owner_id=alice.id,
-         tags="devops,infra", due_date=datetime.utcnow() + timedelta(days=3)),
+         tags=[get_tag("devops", tag_cache), get_tag("infra", tag_cache)],
+         due_date=now + timedelta(days=3)),
     Task(title="Write API documentation", description="Document all endpoints using OpenAPI.",
-         status="todo", priority=2, owner_id=alice.id, tags="docs"),
+         status="todo", priority=2, owner_id=alice.id,
+         tags=[get_tag("docs", tag_cache)]),
     Task(title="Fix login page bug", description="Users are redirected to a blank page after login.",
          status="todo", priority=3, owner_id=bob.id,
-         due_date=datetime.utcnow() - timedelta(days=1)),  # overdue
+         due_date=now - timedelta(days=1)),
     Task(title="Add unit tests for helpers", description=None,
-         status="todo", priority=1, owner_id=bob.id, tags="testing"),
+         status="todo", priority=1, owner_id=bob.id,
+         tags=[get_tag("testing", tag_cache)]),
     Task(title="Migrate database to Postgres", description="Move from SQLite to PostgreSQL for production.",
-         status="done", priority=2, owner_id=carol.id, tags="db,infra"),
+         status="done", priority=2, owner_id=carol.id,
+         tags=[get_tag("db", tag_cache), get_tag("infra", tag_cache)]),
     Task(title="Code review for PR #42", description=None,
          status="done", priority=1, owner_id=carol.id),
 ]
@@ -51,9 +65,8 @@ tasks_data = [
 db.add_all(tasks_data)
 db.commit()
 
-# Add comments
 comments = [
-    Comment(content="Started the pipeline setup — blocked on secrets config.",
+    Comment(content="Started the pipeline setup - blocked on secrets config.",
             task_id=tasks_data[0].id, author_id=bob.id),
     Comment(content="Docs template is in Confluence, linking there.",
             task_id=tasks_data[1].id, author_id=carol.id),

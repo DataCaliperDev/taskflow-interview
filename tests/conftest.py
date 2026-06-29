@@ -1,21 +1,18 @@
-# tests/conftest.py
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.database import Base, get_db
 
-# Issue: uses a separate in-memory DB, but does not reset between individual tests
-# — tests that mutate data will bleed state into later tests
-TEST_DATABASE_URL = "sqlite:///./test.db"
-
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(
+    "sqlite://",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base.metadata.create_all(bind=engine)
 
 
 def override_get_db():
@@ -29,25 +26,60 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-@pytest.fixture(scope="module")  # Issue: module scope means DB state leaks between tests
+@pytest.fixture(autouse=True)
+def reset_database():
+    Base.metadata.create_all(bind=engine)
+    yield
+    Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
 def client():
     with TestClient(app) as c:
         yield c
 
 
-@pytest.fixture(scope="module")
-def test_user_token(client):
-    """Register and log in a test user, returning a bearer token."""
+@pytest.fixture
+def db_session():
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def register_and_login(client, username="testuser", password="testpass123",
+                       email=None, role="member"):
+    email = email or f"{username}@example.com"
     client.post("/auth/register", json={
-        "username": "testuser",
-        "email": "testuser@example.com",
-        "password": "testpass",
+        "username": username,
+        "email": email,
+        "password": password,
     })
+    if role != "member":
+        from app.models import User
+        session = TestingSessionLocal()
+        user = session.query(User).filter(User.username == username).first()
+        user.role = role
+        session.commit()
+        session.close()
     response = client.post(
         "/auth/login",
-        data={"username": "testuser", "password": "testpass"},
+        data={"username": username, "password": password},
     )
     return response.json()["access_token"]
 
 
-# Issue: no fixture for DB teardown — test.db file persists after the suite runs
+@pytest.fixture
+def test_user_token(client):
+    return register_and_login(client)
+
+
+@pytest.fixture
+def admin_token(client):
+    return register_and_login(client, username="adminuser", role="admin")
+
+
+@pytest.fixture
+def auth_headers(test_user_token):
+    return {"Authorization": f"Bearer {test_user_token}"}
