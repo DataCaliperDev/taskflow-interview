@@ -217,3 +217,83 @@ def test_update_task_partial_none_fields_ok(client, auth_headers, created_task):
     assert data["priority"] == 1
     # status was not sent (None) and is preserved unchanged
     assert data["status"] == created_task["status"]
+
+
+# ── UC-3: Task authorization ──────────────────────────────────────────────────
+
+def test_owner_can_update_own_task(client, auth_headers, created_task):
+    """The owner updates their own task → 200."""
+    response = client.put(
+        f"/tasks/{created_task['id']}",
+        json={"status": "done"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "done"
+
+
+def test_owner_can_delete_own_task(client, auth_headers, created_task):
+    """The owner deletes their own task → 200."""
+    response = client.delete(
+        f"/tasks/{created_task['id']}", headers=auth_headers
+    )
+    assert response.status_code == 200
+    assert response.json()["message"] == "Task deleted"
+
+
+def test_non_owner_cannot_update_task(
+    client, created_task, second_auth_headers
+):
+    """A different non-admin user updating someone else's task → 403."""
+    response = client.put(
+        f"/tasks/{created_task['id']}",
+        json={"status": "done"},
+        headers=second_auth_headers,
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not authorized"
+    # The task is untouched.
+    task = client.get(
+        f"/tasks/{created_task['id']}", headers=second_auth_headers
+    ).json()
+    assert task["status"] == created_task["status"]
+
+
+def test_non_owner_cannot_delete_task(
+    client, created_task, second_auth_headers
+):
+    """A different non-admin user deleting someone else's task → 403."""
+    response = client.delete(
+        f"/tasks/{created_task['id']}", headers=second_auth_headers
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not authorized"
+    # The task still exists.
+    follow = client.get(
+        f"/tasks/{created_task['id']}", headers=second_auth_headers
+    )
+    assert follow.status_code == 200
+
+
+def test_admin_can_update_other_users_task(
+    client, created_task, admin_auth_headers
+):
+    """An admin updating another user's task → 200."""
+    response = client.put(
+        f"/tasks/{created_task['id']}",
+        json={"status": "done"},
+        headers=admin_auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "done"
+
+
+def test_admin_can_delete_other_users_task(
+    client, created_task, admin_auth_headers
+):
+    """An admin deleting another user's task → 200."""
+    response = client.delete(
+        f"/tasks/{created_task['id']}", headers=admin_auth_headers
+    )
+    assert response.status_code == 200
+    assert response.json()["message"] == "Task deleted"

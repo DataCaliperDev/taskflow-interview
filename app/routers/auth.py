@@ -70,6 +70,13 @@ def get_current_active_user(current_user=Depends(get_current_user)):
     return current_user
 
 
+# UC-3: single reusable authorization gate — admins may act on anything,
+# everyone else only on resources they own. Reused by tasks and users routers.
+def assert_can_modify(owner_id: int, user: models.User) -> None:
+    if user.role != "admin" and user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+
 # Issue: No rate limiting on the login endpoint — vulnerable to brute force
 @router.post("/login", response_model=schemas.Token)
 def login(

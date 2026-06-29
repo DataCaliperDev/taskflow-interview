@@ -98,6 +98,50 @@ def auth_headers(test_user_token):
 
 
 @pytest.fixture(scope="function")
+def second_user_token(client):
+    """Register + log in a SECOND, non-owner member; return its bearer token.
+
+    Used by UC-3 tests to assert a different non-admin user is forbidden from
+    modifying another user's tasks/profile.
+    """
+    return _register_and_login(
+        client, "otheruser", "otheruser@example.com", "otherpass1"
+    )
+
+
+@pytest.fixture(scope="function")
+def second_auth_headers(second_user_token):
+    """Authorization header for the second (non-owner) member."""
+    return {"Authorization": f"Bearer {second_user_token}"}
+
+
+@pytest.fixture(scope="function")
+def admin_token(client, db):
+    """Register a user, promote it to ``role='admin'`` directly via the db
+    session (there is no API to set the role), then log in and return its token.
+    """
+    from app import models
+
+    token = _register_and_login(
+        client, "adminuser", "adminuser@example.com", "adminpass1"
+    )
+    admin = (
+        db.query(models.User)
+        .filter(models.User.username == "adminuser")
+        .first()
+    )
+    admin.role = "admin"
+    db.commit()
+    return token
+
+
+@pytest.fixture(scope="function")
+def admin_auth_headers(admin_token):
+    """Authorization header for the admin user."""
+    return {"Authorization": f"Bearer {admin_token}"}
+
+
+@pytest.fixture(scope="function")
 def created_task(client, auth_headers):
     """Create a task and RETURN it (replaces the old module-global task id)."""
     response = client.post(
