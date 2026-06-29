@@ -1,53 +1,113 @@
 # tests/conftest.py
 
+"""
+Test fixtures for the TaskFlow suite.
+
+Isolation strategy (UC-12):
+- A single in-memory SQLite database shared across connections via ``StaticPool``
+  (a brand-new on-disk ``test.db`` is never touched).
+- The schema is dropped and recreated for **every** test via a function-scoped
+  ``db`` fixture, so no state bleeds between tests.
+- ``get_db`` is overridden to yield the per-test session; tests and the app share
+  the same session, which lets later UCs seed rows directly through the fixture.
+- ``TestClient(app)`` is created **without** the ``with`` context manager on
+  purpose: entering the context would fire the app's ``startup`` hook
+  (``init_db()``), which creates tables on the real on-disk file engine. The test
+  engine's tables are created by the fixture instead.
+"""
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.database import Base, get_db
 
-# Issue: uses a separate in-memory DB, but does not reset between individual tests
-# — tests that mutate data will bleed state into later tests
-TEST_DATABASE_URL = "sqlite:///./test.db"
-
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+# In-memory DB shared across connections (StaticPool keeps a single connection).
+engine = create_engine(
+    "sqlite://",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-Base.metadata.create_all(bind=engine)
 
+def _register_and_login(client, username, email, password):
+    """Register a user then log it in; return the access token.
 
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture(scope="module")  # Issue: module scope means DB state leaks between tests
-def client():
-    with TestClient(app) as c:
-        yield c
-
-
-@pytest.fixture(scope="module")
-def test_user_token(client):
-    """Register and log in a test user, returning a bearer token."""
-    client.post("/auth/register", json={
-        "username": "testuser",
-        "email": "testuser@example.com",
-        "password": "testpass",
-    })
+    Collapses the register+login boilerplate shared by the token fixtures.
+    """
+    client.post(
+        "/auth/register",
+        json={"username": username, "email": email, "password": password},
+    )
     response = client.post(
         "/auth/login",
-        data={"username": "testuser", "password": "testpass"},
+        data={"username": username, "password": password},
     )
     return response.json()["access_token"]
 
 
-# Issue: no fixture for DB teardown — test.db file persists after the suite runs
+@pytest.fixture(scope="function")
+def db():
+    """Fresh schema + session per test — guarantees no cross-test state."""
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(scope="function")
+def client(db):
+    """TestClient wired to the per-test session via a dependency override."""
+
+    def override_get_db():
+        yield db
+
+    app.dependency_overrides[get_db] = override_get_db
+    # NOTE: no `with TestClient(app)` — avoids triggering the startup hook that
+    # would init the real file-backed DB.
+    test_client = TestClient(app)
+    try:
+        yield test_client
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture(scope="function")
+def test_user_token(client):
+    """Register + log in a fresh user each test; return its bearer token.
+
+    Password is >= 8 chars so the fixture survives UC-9's length validation.
+    """
+    return _register_and_login(
+        client, "testuser", "testuser@example.com", "testpass1"
+    )
+
+
+@pytest.fixture(scope="function")
+def auth_headers(test_user_token):
+    """Authorization header for the fixture user."""
+    return {"Authorization": f"Bearer {test_user_token}"}
+
+
+@pytest.fixture(scope="function")
+def created_task(client, auth_headers):
+    """Create a task and RETURN it (replaces the old module-global task id)."""
+    response = client.post(
+        "/tasks/",
+        json={
+            "title": "Fixture Task",
+            "description": "created by fixture",
+            "priority": 2,
+            "status": "todo",
+        },
+        headers=auth_headers,
+    )
+    return response.json()

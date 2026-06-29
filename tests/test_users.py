@@ -5,47 +5,57 @@ Tests for the /users endpoints.
 """
 
 
-def test_get_me(client, test_user_token):
-    response = client.get(
-        "/users/me",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    )
+def test_get_me(client, auth_headers):
+    response = client.get("/users/me", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
-    assert "username" in data
-    # Issue: does not assert that password_hash is NOT in the response
+    assert data["id"]
+    assert data["username"] == "testuser"
+    assert data["email"] == "testuser@example.com"
+    assert data["role"] == "member"
 
 
-def test_list_users_authenticated(client, test_user_token):
-    response = client.get(
-        "/users/",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    )
+def test_list_users_authenticated(client, auth_headers):
+    response = client.get("/users/", headers=auth_headers)
     assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert any(u["username"] == "testuser" for u in data)
 
 
 def test_list_users_unauthenticated(client):
     response = client.get("/users/")
-    # Issue: test expects 401, which is correct — but it only checks the code, not the error message
     assert response.status_code == 401
 
 
-def test_update_user(client, test_user_token):
-    # First get our own id
-    me = client.get(
-        "/users/me",
-        headers={"Authorization": f"Bearer {test_user_token}"},
-    ).json()
+def test_update_user(client, auth_headers):
+    me = client.get("/users/me", headers=auth_headers).json()
 
     response = client.put(
         f"/users/{me['id']}",
         json={"username": "updateduser"},
-        headers={"Authorization": f"Bearer {test_user_token}"},
+        headers=auth_headers,
     )
     assert response.status_code == 200
-    # Issue: no assertion that username was actually changed to "updateduser"
+    data = response.json()
+    assert data["id"] == me["id"]
+    assert data["username"] == "updateduser"
+    assert data["email"] == me["email"]
 
 
-# Issue: no test verifying that a normal user CANNOT update another user's profile
-# Issue: no test for the admin override header on DELETE
-# Issue: no test for get_user_tasks
+# ── New tests (UC-12) ─────────────────────────────────────────────────────────
+
+def test_get_user_by_id(client, auth_headers):
+    me = client.get("/users/me", headers=auth_headers).json()
+    response = client.get(f"/users/{me['id']}", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()["id"] == me["id"]
+
+
+def test_get_user_tasks(client, auth_headers, created_task):
+    owner_id = created_task["owner_id"]
+    response = client.get(f"/users/{owner_id}/tasks", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert any(t["id"] == created_task["id"] for t in data)
