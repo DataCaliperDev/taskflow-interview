@@ -1,8 +1,22 @@
 # app/schemas.py
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
+
+from app.config import VALID_STATUSES, VALID_PRIORITIES
+
+
+def _ensure_valid_status(v):
+    if v not in VALID_STATUSES:
+        raise ValueError(f"status must be one of {VALID_STATUSES}")
+    return v
+
+
+def _ensure_valid_priority(v):
+    if v not in VALID_PRIORITIES:
+        raise ValueError(f"priority must be one of {VALID_PRIORITIES}")
+    return v
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -19,10 +33,11 @@ class TokenData(BaseModel):
 # ── User ─────────────────────────────────────────────────────────────────────
 
 class UserCreate(BaseModel):
-    username: str
-    email: str
-    password: str
-    # Issue: no field-level validation — no min length, no email format check, no password strength
+    # UC-9: enforce a valid email, a username of at least 3 chars, and a
+    # password of at least 8 chars. Invalid input surfaces as HTTP 422.
+    username: str = Field(min_length=3)
+    email: EmailStr
+    password: str = Field(min_length=8)
 
 
 class UserUpdate(BaseModel):
@@ -71,14 +86,23 @@ class CommentOut(BaseModel):
 # ── Task ──────────────────────────────────────────────────────────────────────
 
 class TaskCreate(BaseModel):
-    title: str
+    # UC-9: title must be non-empty; status/priority must be in the valid sets.
+    title: str = Field(min_length=1)
     description: Optional[str] = None
     status: Optional[str] = "todo"
     priority: Optional[int] = 2
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
-    # Issue: no validation that status is one of the valid values
-    # Issue: no validation that priority is 1, 2, or 3
+
+    @field_validator("status")
+    @classmethod
+    def status_must_be_valid(cls, v):
+        return _ensure_valid_status(v)
+
+    @field_validator("priority")
+    @classmethod
+    def priority_must_be_valid(cls, v):
+        return _ensure_valid_priority(v)
 
 
 class TaskUpdate(BaseModel):
@@ -88,6 +112,21 @@ class TaskUpdate(BaseModel):
     priority: Optional[int] = None
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def status_must_be_valid(cls, v):
+        # All fields are optional on update — leave an omitted value untouched.
+        if v is None:
+            return v
+        return _ensure_valid_status(v)
+
+    @field_validator("priority")
+    @classmethod
+    def priority_must_be_valid(cls, v):
+        if v is None:
+            return v
+        return _ensure_valid_priority(v)
 
 
 class TaskOut(BaseModel):

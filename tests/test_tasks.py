@@ -144,3 +144,76 @@ def test_task_summary_by_user(client, auth_headers, created_task):
     row = next(r for r in data if r["user_id"] == created_task["owner_id"])
     assert row["task_count"] >= 1
     assert "avg_priority_score" in row
+
+
+# ── UC-9: Task input validation ───────────────────────────────────────────────
+
+def test_create_task_valid_status_and_priority(client, auth_headers):
+    """A task with a valid status and priority is accepted (200)."""
+    response = client.post(
+        "/tasks/",
+        json={"title": "Valid", "status": "in_progress", "priority": 3},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "in_progress"
+    assert data["priority"] == 3
+
+
+def test_create_task_invalid_status(client, auth_headers):
+    """An out-of-set status is rejected with 422."""
+    response = client.post(
+        "/tasks/",
+        json={"title": "Bad status", "status": "invalid", "priority": 2},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert "status" in str(response.json()["detail"])
+
+
+def test_create_task_invalid_priority(client, auth_headers):
+    """An out-of-set priority is rejected with 422."""
+    response = client.post(
+        "/tasks/",
+        json={"title": "Bad priority", "status": "todo", "priority": 99},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert "priority" in str(response.json()["detail"])
+
+
+def test_create_task_empty_title(client, auth_headers):
+    """An empty title is rejected with 422 (min_length=1)."""
+    response = client.post(
+        "/tasks/",
+        json={"title": "", "status": "todo", "priority": 1},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert "title" in str(response.json()["detail"])
+
+
+def test_update_task_invalid_status(client, auth_headers, created_task):
+    """Updating with an out-of-set status is rejected with 422."""
+    response = client.put(
+        f"/tasks/{created_task['id']}",
+        json={"status": "nope"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert "status" in str(response.json()["detail"])
+
+
+def test_update_task_partial_none_fields_ok(client, auth_headers, created_task):
+    """A partial update (only priority) leaves omitted/None fields alone (200)."""
+    response = client.put(
+        f"/tasks/{created_task['id']}",
+        json={"priority": 1},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["priority"] == 1
+    # status was not sent (None) and is preserved unchanged
+    assert data["status"] == created_task["status"]

@@ -140,3 +140,49 @@ def test_verify_password_roundtrip():
     hashed = hash_password("correcthorse1")
     assert verify_password("correcthorse1", hashed) is True
     assert verify_password("wrongpassword1", hashed) is False
+
+
+# ── UC-9: UserCreate input validation ─────────────────────────────────────────
+
+def test_register_valid_input(client):
+    """A fully valid registration succeeds with 200."""
+    response = client.post("/auth/register", json={
+        "username": "validuser",
+        "email": "valid@example.com",
+        "password": "validpass1",
+    })
+    assert response.status_code == 200
+    assert response.json()["username"] == "validuser"
+
+
+def test_register_username_too_short(client):
+    """A username shorter than 3 chars is rejected with 422."""
+    response = client.post("/auth/register", json={
+        "username": "ab",
+        "email": "short@example.com",
+        "password": "validpass1",
+    })
+    assert response.status_code == 422
+    assert "username" in str(response.json()["detail"])
+
+
+def test_register_password_too_short(client):
+    """A password shorter than 8 chars is rejected with 422."""
+    response = client.post("/auth/register", json={
+        "username": "pwuser",
+        "email": "pw@example.com",
+        "password": "short",
+    })
+    assert response.status_code == 422
+    assert "password" in str(response.json()["detail"])
+
+
+def test_register_malformed_email(client):
+    """A malformed email is rejected with 422."""
+    response = client.post("/auth/register", json={
+        "username": "emailuser",
+        "email": "notanemail",
+        "password": "validpass1",
+    })
+    assert response.status_code == 422
+    assert "email" in str(response.json()["detail"])
