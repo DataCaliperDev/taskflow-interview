@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
 
 from app import models, schemas
@@ -121,12 +121,20 @@ def task_summary_by_user(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Return each user's task count and average priority score."""
-    users = db.query(models.User).all()
+    # UC-5: eliminate the N+1 query. The original code issued one SELECT to load
+    # all users and then one additional SELECT *per user* to fetch that user's
+    # tasks (N+1 total). Here we eager-load every user's tasks in a single query
+    # via joinedload(User.tasks), so `user.tasks` below is already populated and
+    # triggers no extra database round-trips.
+    #
+    # Note: staying on the legacy `db.query(...)` Query API auto-dedupes joined
+    # collections, so `.unique()` is not required here. (It would be needed only
+    # if this were rewritten to the 2.0-style `select()` construct.)
+    users = db.query(models.User).options(joinedload(models.User.tasks)).all()
     result = []
 
     for user in users:
-        # Issue: N+1 query — one extra SELECT per user instead of a single JOIN/aggregation
-        tasks = db.query(models.Task).filter(models.Task.owner_id == user.id).all()
+        tasks = user.tasks  # already eager-loaded — no extra query per user
         scores = [calculate_priority_score(t.priority, t.status) for t in tasks]
         avg_score = sum(scores) / len(scores) if scores else 0   # Issue: ZeroDivisionError if len == 0 (handled here, but pattern is fragile)
 

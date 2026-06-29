@@ -146,6 +146,80 @@ def test_task_summary_by_user(client, auth_headers, created_task):
     assert "avg_priority_score" in row
 
 
+def test_task_summary_aggregation_correctness(client, auth_headers, db):
+    """UC-5: the summary reports exact task_count and avg_priority_score.
+
+    Tasks are seeded directly through the db fixture with explicit owner_id,
+    because ``POST /tasks/`` always assigns ``owner_id = current_user`` and so
+    cannot give a *different* user tasks. The expected average is computed with
+    the same ``calculate_priority_score`` the endpoint uses, so the assertion
+    pins the real aggregation rather than a hand-copied magic number.
+    """
+    from app import models
+    from app.utils.helpers import calculate_priority_score
+
+    # A user WITH a known set of tasks of known priorities/statuses.
+    busy = models.User(
+        username="busyuser",
+        email="busyuser@example.com",
+        password_hash="x",
+        role="member",
+    )
+    # A user with ZERO tasks.
+    idle = models.User(
+        username="idleuser",
+        email="idleuser@example.com",
+        password_hash="x",
+        role="member",
+    )
+    db.add_all([busy, idle])
+    db.commit()
+    db.refresh(busy)
+    db.refresh(idle)
+
+    seeded = [
+        ("todo", 3),         # 30 * 1   = 30
+        ("in_progress", 2),  # 20 * 1.5 = 30
+        ("done", 1),         # 10 * 0   = 0
+    ]
+    for status, priority in seeded:
+        db.add(
+            models.Task(
+                title=f"{status}-{priority}",
+                status=status,
+                priority=priority,
+                owner_id=busy.id,
+            )
+        )
+    db.commit()
+
+    expected_scores = [calculate_priority_score(p, s) for s, p in seeded]
+    expected_avg = round(sum(expected_scores) / len(expected_scores), 2)
+
+    response = client.get("/tasks/summary/by-user", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+
+    # Response shape / keys are unchanged.
+    assert isinstance(data, list)
+    for row in data:
+        assert set(row.keys()) == {
+            "user_id",
+            "username",
+            "task_count",
+            "avg_priority_score",
+        }
+
+    busy_row = next(r for r in data if r["user_id"] == busy.id)
+    assert busy_row["username"] == "busyuser"
+    assert busy_row["task_count"] == len(seeded)
+    assert busy_row["avg_priority_score"] == expected_avg  # == 20.0
+
+    idle_row = next(r for r in data if r["user_id"] == idle.id)
+    assert idle_row["task_count"] == 0
+    assert idle_row["avg_priority_score"] == 0
+
+
 # ── UC-9: Task input validation ───────────────────────────────────────────────
 
 def test_create_task_valid_status_and_priority(client, auth_headers):
