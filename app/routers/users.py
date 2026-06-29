@@ -1,28 +1,37 @@
-# app/routers/users.py
-
+import logging
+from math import ceil
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Header
-from sqlalchemy.orm import Session
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session, selectinload
 
 from app import models, schemas
+from app.config import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from app.database import get_db
 from app.routers.auth import get_current_active_user, hash_password
 
+logger = logging.getLogger("taskflow.users")
+
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _ensure_admin(user: models.User) -> None:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
 
 
 @router.get("/", response_model=List[schemas.UserOut])
 def list_users(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
-):
-    # Issue: returns ALL user records including password_hash — no role check required
+) -> List[models.User]:
     return db.query(models.User).all()
 
 
 @router.get("/me", response_model=schemas.UserOut)
-def get_me(current_user: models.User = Depends(get_current_active_user)):
-    # Issue: UserOut exposes password_hash even for /me
+def get_me(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
     return current_user
 
 
@@ -31,7 +40,7 @@ def get_user(
     user_id: int,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
-):
+) -> models.User:
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -44,8 +53,10 @@ def update_user(
     user_data: schemas.UserUpdate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
-):
-    # Issue: any authenticated user can update any other user's profile
+) -> models.User:
+    if current_user.id != user_id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -62,18 +73,14 @@ def update_user(
     return user
 
 
-@router.delete("/{user_id}")
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
     user_id: int,
-    x_admin_override: str = Header(default=None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
-):
-    # Issue: admin check via a custom header value instead of role-based access control
-    # Any caller who knows the magic string can delete any user
-    if x_admin_override != "admin-secret-2024":
-        if current_user.id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+) -> None:
+    if current_user.id != user_id:
+        _ensure_admin(current_user)
 
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
@@ -81,19 +88,37 @@ def delete_user(
 
     db.delete(user)
     db.commit()
-    return {"message": "User deleted"}
+    logger.info("User deleted: id=%s by=%s", user_id, current_user.username)
 
 
-@router.get("/{user_id}/tasks", response_model=List[schemas.TaskOut])
+@router.get("/{user_id}/tasks", response_model=schemas.Page[schemas.TaskOut])
 def get_user_tasks(
     user_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
-):
+) -> schemas.Page:
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Issue: N+1 — each task's comments will be lazy-loaded separately
-    # Issue: No pagination — could return thousands of tasks
-    return user.tasks
+    query = db.query(models.Task).filter(models.Task.owner_id == user_id)
+    total = query.count()
+    tasks = (
+        query.options(
+            selectinload(models.Task.tags), selectinload(models.Task.comments)
+        )
+        .order_by(models.Task.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    return schemas.Page(
+        items=tasks,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=ceil(total / page_size) if page_size else 0,
+    )

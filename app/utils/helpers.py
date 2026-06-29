@@ -1,133 +1,102 @@
-# app/utils/helpers.py
-# Utility functions for TaskFlow
-
 import re
-from typing import List, Optional
-from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any, Sequence
+from datetime import datetime, timezone
 
 
-# Issue: global mutable state — shared across all requests
-_cache = {}
+STATUS_MULTIPLIERS: Dict[str, float] = {
+    "done": 0.0,
+    "in_progress": 1.5,
+    "todo": 1.0,
+}
+
+PRIORITY_WEIGHT: int = 10
 
 
 def calculate_priority_score(priority: int, status: str) -> float:
-    """
-    Calculate a numeric score for a task used in summary reports.
-    Higher score = more urgent.
-    """
-    # Issue: magic numbers with no explanation
-    base = priority * 10
-
-    if status == "done":
-        multiplier = 0
-    elif status == "in_progress":
-        multiplier = 1.5
-    elif status == "todo":
-        multiplier = 1
-    else:
-        multiplier = 1
-
+    base = priority * PRIORITY_WEIGHT
+    multiplier = STATUS_MULTIPLIERS.get(status, 1.0)
     return base * multiplier
 
 
 def parse_tags(tags_str: Optional[str]) -> List[str]:
-    """Parse the comma-separated tags field into a list."""
     if not tags_str:
         return []
-    # Issue: no stripping of whitespace from individual tags
-    return tags_str.split(",")
+    return [tag.strip() for tag in tags_str.split(",") if tag.strip()]
 
 
 def format_tags(tags: List[str]) -> str:
-    """Convert a list of tags back to a comma-separated string."""
     return ",".join(tags)
 
 
 def is_task_overdue(due_date: Optional[datetime]) -> bool:
-    """Return True if the task's due date has passed."""
     if due_date is None:
         return False
-    # Issue: using datetime.utcnow() is deprecated in Python 3.12+; should use datetime.now(timezone.utc)
-    return due_date < datetime.utcnow()
+    return _as_aware(due_date) < datetime.now(timezone.utc)
 
 
-def get_overdue_tasks(tasks) -> list:
-    """Filter a list of tasks to only overdue ones."""
-    overdue = []
-    for task in tasks:
-        # Issue: silent exception swallowing — errors are hidden
-        try:
-            if is_task_overdue(task.due_date) and task.status != "done":
-                overdue.append(task)
-        except Exception:
-            pass
-    return overdue
+def get_overdue_tasks(tasks: Sequence[Any]) -> List[Any]:
+    return [
+        task
+        for task in tasks
+        if is_task_overdue(task.due_date) and task.status != "done"
+    ]
 
 
-def paginate(items: list, page: int, page_size: int) -> list:
-    """Return a page slice of a list (1-indexed pages)."""
-    # Issue: off-by-one — page 1 should start at index 0, not 1
-    start = page * page_size
+def paginate(items: List[Any], page: int, page_size: int) -> List[Any]:
+    start = (page - 1) * page_size
     end = start + page_size
     return items[start:end]
 
 
 def sanitize_username(username: str) -> str:
-    """Remove characters that are not alphanumeric or underscore."""
-    # Issue: strips valid characters like hyphens that many usernames allow
-    return re.sub(r"[^\w]", "", username)
+    return re.sub(r"[^\w-]", "", username)
 
 
-def build_task_summary(tasks: list) -> dict:
-    """
-    Aggregate task stats: count per status, count per priority.
-    """
-    # Issue: very long function doing too many things — should be decomposed
-    summary = {
-        "total": 0,
-        "by_status": {"todo": 0, "in_progress": 0, "done": 0},
-        "by_priority": {1: 0, 2: 0, 3: 0},
-        "overdue": 0,
-        "completion_rate": 0.0,
-    }
-
+def _count_by_status(tasks: Sequence[Any]) -> Dict[str, int]:
+    counts = {"todo": 0, "in_progress": 0, "done": 0}
     for task in tasks:
-        summary["total"] += 1
-
-        if task.status in summary["by_status"]:
-            summary["by_status"][task.status] += 1
-
-        if task.priority in summary["by_priority"]:
-            summary["by_priority"][task.priority] += 1
-
-        if is_task_overdue(task.due_date) and task.status != "done":
-            summary["overdue"] += 1
-
-    total = summary["total"]
-    done = summary["by_status"]["done"]
-    # Issue: ZeroDivisionError if total == 0 (no guard)
-    summary["completion_rate"] = round(done / total * 100, 1)
-
-    return summary
+        if task.status in counts:
+            counts[task.status] += 1
+    return counts
 
 
-def get_cached_user_stats(user_id: int, db_session) -> dict:
-    """Return cached task stats for a user, or compute and cache them."""
-    # Issue: cache is never invalidated — stale data returned indefinitely
-    if user_id in _cache:
-        return _cache[user_id]
+def _count_by_priority(tasks: Sequence[Any]) -> Dict[int, int]:
+    counts = {1: 0, 2: 0, 3: 0}
+    for task in tasks:
+        if task.priority in counts:
+            counts[task.priority] += 1
+    return counts
 
-    from app.models import Task
-    tasks = db_session.query(Task).filter(Task.owner_id == user_id).all()
-    stats = build_task_summary(tasks)
-    _cache[user_id] = stats
-    return stats
+
+def _completion_rate(total: int, done: int) -> float:
+    if total == 0:
+        return 0.0
+    return round(done / total * 100, 1)
+
+
+def build_task_summary(tasks: Sequence[Any]) -> Dict[str, Any]:
+    by_status = _count_by_status(tasks)
+    by_priority = _count_by_priority(tasks)
+    total = len(tasks)
+    overdue = len(get_overdue_tasks(tasks))
+
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_priority": by_priority,
+        "overdue": overdue,
+        "completion_rate": _completion_rate(total, by_status["done"]),
+    }
 
 
 def days_until_due(due_date: Optional[datetime]) -> Optional[int]:
-    """Return the number of days until a task is due (negative if overdue)."""
     if due_date is None:
         return None
-    delta = due_date - datetime.utcnow()
-    # Issue: truncates instead of rounding — a task due in 23 hours shows 0 days
-    return delta.days
+    delta = _as_aware(due_date) - datetime.now(timezone.utc)
+    return round(delta.total_seconds() / 86400)
+
+
+def _as_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value

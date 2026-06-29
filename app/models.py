@@ -1,25 +1,48 @@
-# app/models.py
-
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Text, DateTime
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Boolean,
+    ForeignKey,
+    Text,
+    DateTime,
+    Table,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
 
 
+task_tags = Table(
+    "task_tags",
+    Base.metadata,
+    Column("task_id", Integer, ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 class User(Base):
     __tablename__ = "users"
 
-    # Issue: no index on `email` despite being used as lookup key
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(50), unique=True)
-    email = Column(String(100), unique=True)
+    username = Column(String(50), unique=True, index=True)
+    email = Column(String(100), unique=True, index=True)
     password_hash = Column(String(255))
     is_active = Column(Boolean, default=True)
-    role = Column(String(20), default="member")  # "admin" or "member"
+    role = Column(String(20), default="member")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     tasks = relationship("Task", back_populates="owner", lazy="select")
     comments = relationship("Comment", back_populates="author")
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True, index=True, nullable=False)
+
+    tasks = relationship("Task", secondary=task_tags, back_populates="tags")
 
 
 class Task(Base):
@@ -28,17 +51,16 @@ class Task(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200))
     description = Column(Text, nullable=True)
-    status = Column(String(20), default="todo")   # todo | in_progress | done
-    priority = Column(Integer, default=2)          # 1=low, 2=medium, 3=high
-    owner_id = Column(Integer, ForeignKey("users.id"))
-    # Issue: no index on `status` and `owner_id` which are heavily filtered on
-    # Issue: no `updated_at` column for tracking modifications
+    status = Column(String(20), default="todo", index=True)
+    priority = Column(Integer, default=2)
+    owner_id = Column(Integer, ForeignKey("users.id"), index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     due_date = Column(DateTime(timezone=True), nullable=True)
-    tags = Column(String(500), nullable=True)   # Issue: comma-separated strings instead of a Tag table
 
     owner = relationship("User", back_populates="tasks")
     comments = relationship("Comment", back_populates="task", lazy="select")
+    tags = relationship("Tag", secondary=task_tags, back_populates="tasks")
 
 
 class Comment(Base):
@@ -46,7 +68,7 @@ class Comment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     content = Column(Text)
-    task_id = Column(Integer, ForeignKey("tasks.id"))
+    task_id = Column(Integer, ForeignKey("tasks.id"), index=True)
     author_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
