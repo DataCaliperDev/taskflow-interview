@@ -16,7 +16,7 @@ def test_register(client):
         "password": "pass",   # Issue: tests should not use trivially weak passwords — masks validation gaps
     })
     assert response.status_code == 200
-    # Issue: response includes password_hash — test doesn't assert this field is absent
+    assert "password_hash" not in response.json()
 
 
 def test_register_duplicate_email(client):

@@ -13,7 +13,7 @@ def test_get_me(client, test_user_token):
     assert response.status_code == 200
     data = response.json()
     assert "username" in data
-    # Issue: does not assert that password_hash is NOT in the response
+    assert "password_hash" not in data
 
 
 def test_list_users_authenticated(client, test_user_token):
