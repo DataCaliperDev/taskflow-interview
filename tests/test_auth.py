@@ -4,6 +4,10 @@
 Tests for the /auth endpoints.
 """
 
+import hashlib
+
+from app.routers.auth import hash_password, verify_password
+
 
 def test_register(client):
     response = client.post("/auth/register", json={
@@ -57,3 +61,29 @@ def test_login_wrong_password(client):
 # Issue: no test for accessing a protected route with an expired token
 # Issue: no test for registering with a missing field (e.g., no email)
 # Issue: no test for duplicate username registration
+
+
+def test_password_hash_is_not_plaintext():
+    password = "secret"
+    hashed = hash_password(password)
+
+    assert hashed != password
+    assert password not in hashed
+    md5_digest = hashlib.md5(password.encode()).hexdigest()
+    assert hashed != md5_digest
+
+
+def test_password_hash_is_not_recoverable():
+    password = "hunter2"
+    hash_a = hash_password(password)
+    hash_b = hash_password(password)
+
+    # bcrypt salting: same password yields different hashes each time
+    assert hash_a != hash_b
+
+    # verify_password must accept the correct plaintext against either hash
+    assert verify_password(password, hash_a) is True
+    assert verify_password(password, hash_b) is True
+
+    # and reject a wrong password
+    assert verify_password("wrongpassword", hash_a) is False

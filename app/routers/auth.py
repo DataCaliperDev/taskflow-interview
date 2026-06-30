@@ -1,6 +1,6 @@
 # app/routers/auth.py
 
-import hashlib
+import bcrypt
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -18,13 +18,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-# Issue: MD5 is cryptographically broken — should use bcrypt/argon2
 def hash_password(password: str) -> str:
-    return hashlib.md5(password.encode()).hexdigest()
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return hash_password(plain_password) == hashed_password
+    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
