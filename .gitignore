@@ -1,0 +1,10 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
