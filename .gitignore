@@ -1,5 +1,6 @@
 # Python
 .venv/
+venv/
 __pycache__/
 *.py[cod]
 *.pyo
@@ -8,3 +9,6 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+
+# Local Sqlite database
+*.db
