@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.enums import UserRole
 from app.main import app
 from app.database import Base, get_db
 
@@ -46,6 +47,44 @@ def test_user_token(client):
     response = client.post(
         "/auth/login",
         data={"username": "testuser", "password": "testpass"},
+    )
+    return response.json()["access_token"]
+
+
+@pytest.fixture(scope="module")
+def other_user_token(client):
+    """Register and log in a second regular user, returning a bearer token."""
+    client.post("/auth/register", json={
+        "username": "otheruser",
+        "email": "otheruser@example.com",
+        "password": "otherpass",
+    })
+    response = client.post(
+        "/auth/login",
+        data={"username": "otheruser", "password": "otherpass"},
+    )
+    return response.json()["access_token"]
+
+
+@pytest.fixture(scope="module")
+def admin_user_token(client):
+    """Register a user, elevate to admin via DB, and return a bearer token."""
+    client.post("/auth/register", json={
+        "username": "adminuser",
+        "email": "adminuser@example.com",
+        "password": "adminpass",
+    })
+    from app import models as m
+    db = TestingSessionLocal()
+    try:
+        user = db.query(m.User).filter(m.User.username == "adminuser").first()
+        user.role = UserRole.ADMIN
+        db.commit()
+    finally:
+        db.close()
+    response = client.post(
+        "/auth/login",
+        data={"username": "adminuser", "password": "adminpass"},
     )
     return response.json()["access_token"]
 

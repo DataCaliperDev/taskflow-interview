@@ -1,12 +1,13 @@
 # app/routers/tasks.py
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app import models, schemas
+from app import errors, models, schemas
 from app.database import get_db
+from app.enums import UserRole
 from app.routers.auth import get_current_active_user
 from app.utils.helpers import calculate_priority_score, parse_tags
 
@@ -54,7 +55,7 @@ def get_task(
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
     # Issue: no authorization check — any authenticated user can read any task
     return task
 
@@ -82,9 +83,11 @@ def update_task(
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
 
-    # Issue: no ownership check — any user can update any task
+    if task.owner_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=errors.NOT_AUTHORIZED)
+
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -102,9 +105,11 @@ def delete_task(
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
 
-    # Issue: no ownership / admin check before deleting
+    if task.owner_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=errors.NOT_AUTHORIZED)
+
     db.delete(task)
     db.commit()
     # Issue: should return 204 No Content; returning a body with 200 is inconsistent
@@ -145,7 +150,7 @@ def add_comment(
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
 
     comment = models.Comment(
         content=comment_data.content,
@@ -166,5 +171,5 @@ def get_task_tags(
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
     return {"tags": parse_tags(task.tags)}

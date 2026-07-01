@@ -5,6 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal, init_db
+from app.enums import UserRole
 from app.models import User, Task, Comment
 from app.routers.auth import hash_password
 from datetime import datetime, timedelta
@@ -21,11 +22,11 @@ db.commit()
 
 # Create users
 alice = User(username="alice", email="alice@example.com",
-             password_hash=hash_password("alice123"), role="admin")
+             password_hash=hash_password("alice123"), role=UserRole.ADMIN)
 bob = User(username="bob", email="bob@example.com",
-           password_hash=hash_password("bob123"), role="member")
+           password_hash=hash_password("bob123"), role=UserRole.MEMBER)
 carol = User(username="carol", email="carol@example.com",
-             password_hash=hash_password("carol123"), role="member")
+             password_hash=hash_password("carol123"), role=UserRole.MEMBER)
 
 db.add_all([alice, bob, carol])
 db.commit()

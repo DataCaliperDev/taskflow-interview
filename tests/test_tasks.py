@@ -70,6 +70,88 @@ def test_get_deleted_task(client, test_user_token):
     assert response.status_code == 404
 
 
+def test_owner_can_update_own_task(client, test_user_token):
+    task = client.post(
+        "/tasks/",
+        json={"title": "My task"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    response = client.put(
+        f"/tasks/{task['id']}",
+        json={"title": "My updated task"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["title"] == "My updated task"
+
+
+def test_owner_can_delete_own_task(client, test_user_token):
+    task = client.post(
+        "/tasks/",
+        json={"title": "Task to delete"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    response = client.delete(
+        f"/tasks/{task['id']}",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 200
+
+
+def test_update_task_by_non_owner_is_forbidden(client, test_user_token, other_user_token):
+    task = client.post(
+        "/tasks/",
+        json={"title": "Owner task"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    response = client.put(
+        f"/tasks/{task['id']}",
+        json={"title": "Hijacked"},
+        headers={"Authorization": f"Bearer {other_user_token}"},
+    )
+    assert response.status_code == 403
+
+
+def test_delete_task_by_non_owner_is_forbidden(client, test_user_token, other_user_token):
+    task = client.post(
+        "/tasks/",
+        json={"title": "Protected task"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    response = client.delete(
+        f"/tasks/{task['id']}",
+        headers={"Authorization": f"Bearer {other_user_token}"},
+    )
+    assert response.status_code == 403
+
+
+def test_admin_can_update_any_task(client, test_user_token, admin_user_token):
+    task = client.post(
+        "/tasks/",
+        json={"title": "Admin target"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    response = client.put(
+        f"/tasks/{task['id']}",
+        json={"title": "Admin updated"},
+        headers={"Authorization": f"Bearer {admin_user_token}"},
+    )
+    assert response.status_code == 200
+
+
+def test_admin_can_delete_any_task(client, test_user_token, admin_user_token):
+    task = client.post(
+        "/tasks/",
+        json={"title": "Admin delete target"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()
+    response = client.delete(
+        f"/tasks/{task['id']}",
+        headers={"Authorization": f"Bearer {admin_user_token}"},
+    )
+    assert response.status_code == 200
+
+
 # Issue: no test for the search endpoint
 # Issue: no test for the /summary/by-user endpoint
 # Issue: no test for unauthorized access (missing auth header)
