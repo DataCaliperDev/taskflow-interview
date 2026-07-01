@@ -5,9 +5,17 @@ import re
 from typing import List, Optional
 from datetime import datetime, timedelta
 
+from app.enums import TaskStatus
+
 
 # Issue: global mutable state — shared across all requests
 _cache = {}
+
+
+SCORE_BASE = 10
+SCORE_MULTIPLIER_IN_PROGRESS = 1.5
+SCORE_MULTIPLIER_TODO = 1.0
+SCORE_MULTIPLIER_DONE = 0.0
 
 
 def calculate_priority_score(priority: int, status: str) -> float:
@@ -15,19 +23,16 @@ def calculate_priority_score(priority: int, status: str) -> float:
     Calculate a numeric score for a task used in summary reports.
     Higher score = more urgent.
     """
-    # Issue: magic numbers with no explanation
-    base = priority * 10
-
-    if status == "done":
-        multiplier = 0
-    elif status == "in_progress":
-        multiplier = 1.5
-    elif status == "todo":
-        multiplier = 1
+    if status == TaskStatus.DONE:
+        multiplier = SCORE_MULTIPLIER_DONE
+    elif status == TaskStatus.IN_PROGRESS:
+        multiplier = SCORE_MULTIPLIER_IN_PROGRESS
+    elif status == TaskStatus.TODO:
+        multiplier = SCORE_MULTIPLIER_TODO
     else:
-        multiplier = 1
+        multiplier = SCORE_MULTIPLIER_TODO
 
-    return base * multiplier
+    return priority * SCORE_BASE * multiplier
 
 
 def parse_tags(tags_str: Optional[str]) -> List[str]:
@@ -57,7 +62,7 @@ def get_overdue_tasks(tasks) -> list:
     for task in tasks:
         # Issue: silent exception swallowing — errors are hidden
         try:
-            if is_task_overdue(task.due_date) and task.status != "done":
+            if is_task_overdue(task.due_date) and task.status != TaskStatus.DONE:
                 overdue.append(task)
         except Exception:
             pass
@@ -85,7 +90,7 @@ def build_task_summary(tasks: list) -> dict:
     # Issue: very long function doing too many things — should be decomposed
     summary = {
         "total": 0,
-        "by_status": {"todo": 0, "in_progress": 0, "done": 0},
+        "by_status": {TaskStatus.TODO: 0, TaskStatus.IN_PROGRESS: 0, TaskStatus.DONE: 0},
         "by_priority": {1: 0, 2: 0, 3: 0},
         "overdue": 0,
         "completion_rate": 0.0,
@@ -100,11 +105,11 @@ def build_task_summary(tasks: list) -> dict:
         if task.priority in summary["by_priority"]:
             summary["by_priority"][task.priority] += 1
 
-        if is_task_overdue(task.due_date) and task.status != "done":
+        if is_task_overdue(task.due_date) and task.status != TaskStatus.DONE:
             summary["overdue"] += 1
 
     total = summary["total"]
-    done = summary["by_status"]["done"]
+    done = summary["by_status"][TaskStatus.DONE]
     # Issue: ZeroDivisionError if total == 0 (no guard)
     summary["completion_rate"] = round(done / total * 100, 1)
 

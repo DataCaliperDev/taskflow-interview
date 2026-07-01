@@ -4,6 +4,7 @@ from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Text, DateT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
+from app.enums import TaskStatus, UserRole
 
 
 class User(Base):
@@ -15,7 +16,7 @@ class User(Base):
     email = Column(String(100), unique=True)
     password_hash = Column(String(255))
     is_active = Column(Boolean, default=True)
-    role = Column(String(20), default="member")  # "admin" or "member"
+    role = Column(String(20), default=UserRole.MEMBER)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     tasks = relationship("Task", back_populates="owner", lazy="select")
@@ -28,7 +29,7 @@ class Task(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200))
     description = Column(Text, nullable=True)
-    status = Column(String(20), default="todo")   # todo | in_progress | done
+    status = Column(String(20), default=TaskStatus.TODO)
     priority = Column(Integer, default=2)          # 1=low, 2=medium, 3=high
     owner_id = Column(Integer, ForeignKey("users.id"))
     # Issue: no index on `status` and `owner_id` which are heavily filtered on

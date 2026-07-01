@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
+from app.enums import TaskStatus
+
 
 # ── Auth ────────────────────────────────────────────────────────────────────
 
@@ -35,7 +37,6 @@ class UserOut(BaseModel):
     id: int
     username: str
     email: str
-    password_hash: str   # Issue: password hash is exposed in the response schema
     is_active: bool
     role: str
     created_at: datetime
@@ -73,7 +74,7 @@ class CommentOut(BaseModel):
 class TaskCreate(BaseModel):
     title: str
     description: Optional[str] = None
-    status: Optional[str] = "todo"
+    status: Optional[str] = TaskStatus.TODO
     priority: Optional[int] = 2
     due_date: Optional[datetime] = None
     tags: Optional[str] = None

@@ -1,14 +1,15 @@
 # app/routers/tasks.py
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import case, func, text
 
-from app import models, schemas
+from app import errors, models, schemas
 from app.database import get_db
+from app.enums import TaskStatus, UserRole
 from app.routers.auth import get_current_active_user
-from app.utils.helpers import calculate_priority_score, parse_tags
+from app.utils.helpers import parse_tags, SCORE_BASE, SCORE_MULTIPLIER_IN_PROGRESS
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -54,7 +55,7 @@ def get_task(
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
     # Issue: no authorization check — any authenticated user can read any task
     return task
 
@@ -80,11 +81,18 @@ def update_task(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    task = db.query(models.Task).filter(models.Task.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    # Admins can act on any task; non-owners get 404 (not 403) so task IDs are not enumerable.
+    if current_user.role == UserRole.ADMIN:
+        task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    else:
+        task = db.query(models.Task).filter(
+            models.Task.id == task_id,
+            models.Task.owner_id == current_user.id,
+        ).first()
 
-    # Issue: no ownership check — any user can update any task
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
+
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -100,11 +108,18 @@ def delete_task(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    task = db.query(models.Task).filter(models.Task.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    # Admins can act on any task; non-owners get 404 (not 403) so task IDs are not enumerable.
+    if current_user.role == UserRole.ADMIN:
+        task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    else:
+        task = db.query(models.Task).filter(
+            models.Task.id == task_id,
+            models.Task.owner_id == current_user.id,
+        ).first()
 
-    # Issue: no ownership / admin check before deleting
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
+
     db.delete(task)
     db.commit()
     # Issue: should return 204 No Content; returning a body with 200 is inconsistent
@@ -117,23 +132,37 @@ def task_summary_by_user(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Return each user's task count and average priority score."""
-    users = db.query(models.User).all()
-    result = []
+    # Previously: 1 query for all users + 1 query per user for their tasks (N+1).
+    # Fix: single LEFT JOIN with SQL aggregation computes task_count and avg_priority_score
+    # in the database, mirroring calculate_priority_score's formula (priority * 10 * multiplier).
+    # Note: this endpoint is not called anywhere in the frontend (dead API).
+    priority_score = case(
+        (models.Task.status == TaskStatus.DONE, 0),
+        (models.Task.status == TaskStatus.IN_PROGRESS, models.Task.priority * SCORE_BASE * SCORE_MULTIPLIER_IN_PROGRESS),
+        else_=models.Task.priority * SCORE_BASE,
+    )
 
-    for user in users:
-        # Issue: N+1 query — one extra SELECT per user instead of a single JOIN/aggregation
-        tasks = db.query(models.Task).filter(models.Task.owner_id == user.id).all()
-        scores = [calculate_priority_score(t.priority, t.status) for t in tasks]
-        avg_score = sum(scores) / len(scores) if scores else 0   # Issue: ZeroDivisionError if len == 0 (handled here, but pattern is fragile)
+    rows = (
+        db.query(
+            models.User.id.label("user_id"),
+            models.User.username,
+            func.count(models.Task.id).label("task_count"),
+            func.coalesce(func.avg(priority_score), 0.0).label("avg_priority_score"),
+        )
+        .outerjoin(models.Task, models.Task.owner_id == models.User.id)
+        .group_by(models.User.id, models.User.username)
+        .all()
+    )
 
-        result.append({
-            "user_id": user.id,
-            "username": user.username,
-            "task_count": len(tasks),
-            "avg_priority_score": round(avg_score, 2),
-        })
-
-    return result
+    return [
+        {
+            "user_id": row.user_id,
+            "username": row.username,
+            "task_count": row.task_count,
+            "avg_priority_score": round(row.avg_priority_score, 2),
+        }
+        for row in rows
+    ]
 
 
 @router.post("/{task_id}/comments", response_model=schemas.CommentOut)
@@ -145,7 +174,7 @@ def add_comment(
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
 
     comment = models.Comment(
         content=comment_data.content,
@@ -166,5 +195,5 @@ def get_task_tags(
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
     return {"tags": parse_tags(task.tags)}

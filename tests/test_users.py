@@ -12,8 +12,11 @@ def test_get_me(client, test_user_token):
     )
     assert response.status_code == 200
     data = response.json()
-    assert "username" in data
-    # Issue: does not assert that password_hash is NOT in the response
+    assert data["username"] == "testuser"
+    assert data["email"] == "testuser@example.com"
+    assert data["is_active"] is True
+    assert "id" in data
+    assert "password_hash" not in data
 
 
 def test_list_users_authenticated(client, test_user_token):
@@ -22,16 +25,19 @@ def test_list_users_authenticated(client, test_user_token):
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    assert any(u["username"] == "testuser" for u in data)
 
 
 def test_list_users_unauthenticated(client):
     response = client.get("/users/")
-    # Issue: test expects 401, which is correct — but it only checks the code, not the error message
     assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated"
 
 
 def test_update_user(client, test_user_token):
-    # First get our own id
     me = client.get(
         "/users/me",
         headers={"Authorization": f"Bearer {test_user_token}"},
@@ -43,9 +49,43 @@ def test_update_user(client, test_user_token):
         headers={"Authorization": f"Bearer {test_user_token}"},
     )
     assert response.status_code == 200
-    # Issue: no assertion that username was actually changed to "updateduser"
+    assert response.json()["username"] == "updateduser"
 
 
-# Issue: no test verifying that a normal user CANNOT update another user's profile
-# Issue: no test for the admin override header on DELETE
-# Issue: no test for get_user_tasks
+def test_non_admin_cannot_delete_another_user(client, other_user_token, admin_user_token):
+    admin_id = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {admin_user_token}"},
+    ).json()["id"]
+    response = client.delete(
+        f"/users/{admin_id}",
+        headers={"Authorization": f"Bearer {other_user_token}"},
+    )
+    assert response.status_code == 403
+
+
+def test_magic_header_no_longer_grants_access(client, other_user_token, admin_user_token):
+    admin_id = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {admin_user_token}"},
+    ).json()["id"]
+    response = client.delete(
+        f"/users/{admin_id}",
+        headers={
+            "Authorization": f"Bearer {other_user_token}",
+            "X-Admin-Override": "admin-secret-2024",
+        },
+    )
+    assert response.status_code == 403
+
+
+def test_admin_can_delete_user(client, test_user_token, admin_user_token):
+    target_id = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    ).json()["id"]
+    response = client.delete(
+        f"/users/{target_id}",
+        headers={"Authorization": f"Bearer {admin_user_token}"},
+    )
+    assert response.status_code == 200

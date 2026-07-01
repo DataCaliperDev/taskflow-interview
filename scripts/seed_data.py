@@ -5,6 +5,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal, init_db
+from app.enums import TaskStatus, UserRole
 from app.models import User, Task, Comment
 from app.routers.auth import hash_password
 from datetime import datetime, timedelta
@@ -21,11 +22,11 @@ db.commit()
 
 # Create users
 alice = User(username="alice", email="alice@example.com",
-             password_hash=hash_password("alice123"), role="admin")
+             password_hash=hash_password("alice123"), role=UserRole.ADMIN)
 bob = User(username="bob", email="bob@example.com",
-           password_hash=hash_password("bob123"), role="member")
+           password_hash=hash_password("bob123"), role=UserRole.MEMBER)
 carol = User(username="carol", email="carol@example.com",
-             password_hash=hash_password("carol123"), role="member")
+             password_hash=hash_password("carol123"), role=UserRole.MEMBER)
 
 db.add_all([alice, bob, carol])
 db.commit()
@@ -33,19 +34,19 @@ db.commit()
 # Create tasks
 tasks_data = [
     Task(title="Set up CI/CD pipeline", description="Configure GitHub Actions for automated testing.",
-         status="in_progress", priority=3, owner_id=alice.id,
+         status=TaskStatus.IN_PROGRESS, priority=3, owner_id=alice.id,
          tags="devops,infra", due_date=datetime.utcnow() + timedelta(days=3)),
     Task(title="Write API documentation", description="Document all endpoints using OpenAPI.",
-         status="todo", priority=2, owner_id=alice.id, tags="docs"),
+         status=TaskStatus.TODO, priority=2, owner_id=alice.id, tags="docs"),
     Task(title="Fix login page bug", description="Users are redirected to a blank page after login.",
-         status="todo", priority=3, owner_id=bob.id,
+         status=TaskStatus.TODO, priority=3, owner_id=bob.id,
          due_date=datetime.utcnow() - timedelta(days=1)),  # overdue
     Task(title="Add unit tests for helpers", description=None,
-         status="todo", priority=1, owner_id=bob.id, tags="testing"),
+         status=TaskStatus.TODO, priority=1, owner_id=bob.id, tags="testing"),
     Task(title="Migrate database to Postgres", description="Move from SQLite to PostgreSQL for production.",
-         status="done", priority=2, owner_id=carol.id, tags="db,infra"),
+         status=TaskStatus.DONE, priority=2, owner_id=carol.id, tags="db,infra"),
     Task(title="Code review for PR #42", description=None,
-         status="done", priority=1, owner_id=carol.id),
+         status=TaskStatus.DONE, priority=1, owner_id=carol.id),
 ]
 
 db.add_all(tasks_data)

@@ -1,5 +1,6 @@
 # app/routers/auth.py
 
+import bcrypt
 import hashlib
 from datetime import datetime, timedelta
 from typing import Optional
@@ -9,7 +10,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from app import models, schemas
+from app import errors, models, schemas
 from app.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.database import get_db
 
@@ -18,13 +19,20 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-# Issue: MD5 is cryptographically broken — should use bcrypt/argon2
 def hash_password(password: str) -> str:
-    return hashlib.md5(password.encode()).hexdigest()
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return hash_password(plain_password) == hashed_password
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+    except ValueError:
+        return False
+
+
+def _is_md5(hash_str: str) -> bool:
+    # bcrypt hashes always start with $2b$; anything else is legacy
+    return not hash_str.startswith("$2b$")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -40,7 +48,7 @@ def get_current_user(
 ):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+        detail=errors.INVALID_CREDENTIALS,
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
@@ -59,7 +67,7 @@ def get_current_user(
 
 def get_current_active_user(current_user=Depends(get_current_user)):
     if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=errors.INACTIVE_USER)
     return current_user
 
 
@@ -73,12 +81,28 @@ def login(
         models.User.username == form_data.username
     ).first()
 
-    if not user or not verify_password(form_data.password, user.password_hash):
-        # Issue: identical error for "user not found" vs "wrong password" is correct,
-        # but the response leaks timing info — no constant-time comparison
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
+            detail=errors.INCORRECT_CREDENTIALS,
+        )
+
+    if _is_md5(user.password_hash):
+        # Lazy migration: user was created before the bcrypt upgrade and still
+        # has an MD5 hash. Verify against MD5, then silently re-hash with bcrypt
+        # so the next login goes through the normal path. No forced reset needed.
+        md5_digest = hashlib.md5(form_data.password.encode()).hexdigest()
+        if md5_digest != user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=errors.INCORRECT_CREDENTIALS,
+            )
+        user.password_hash = hash_password(form_data.password)
+        db.commit()
+    elif not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=errors.INCORRECT_CREDENTIALS,
         )
 
     token = create_access_token(
@@ -95,7 +119,7 @@ def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
         models.User.email == user_data.email
     ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=errors.EMAIL_ALREADY_REGISTERED)
 
     # Issue: no check for duplicate username
     new_user = models.User(

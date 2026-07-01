@@ -1,5 +1,7 @@
 # app/config.py
 
+from app.enums import TaskStatus
+
 # Application configuration
 APP_NAME = "TaskFlow"
 APP_VERSION = "1.0.0"
@@ -23,4 +25,4 @@ PRIORITY_MEDIUM = 2
 PRIORITY_HIGH = 3
 
 VALID_PRIORITIES = [PRIORITY_LOW, PRIORITY_MEDIUM, PRIORITY_HIGH]
-VALID_STATUSES = ["todo", "in_progress", "done"]
+VALID_STATUSES = list(TaskStatus)
