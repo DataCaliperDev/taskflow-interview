@@ -9,14 +9,10 @@ from app.enums import UserRole
 from app.main import app
 from app.database import Base, get_db
 
-# Issue: uses a separate in-memory DB, but does not reset between individual tests
-# — tests that mutate data will bleed state into later tests
 TEST_DATABASE_URL = "sqlite:///./test.db"
 
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base.metadata.create_all(bind=engine)
 
 
 def override_get_db():
@@ -30,13 +26,20 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 
-@pytest.fixture(scope="module")  # Issue: module scope means DB state leaks between tests
-def client():
+@pytest.fixture
+def reset_db():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+@pytest.fixture
+def client(reset_db):
     with TestClient(app) as c:
         yield c
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def test_user_token(client):
     """Register and log in a test user, returning a bearer token."""
     client.post("/auth/register", json={
@@ -51,7 +54,7 @@ def test_user_token(client):
     return response.json()["access_token"]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def other_user_token(client):
     """Register and log in a second regular user, returning a bearer token."""
     client.post("/auth/register", json={
@@ -66,7 +69,7 @@ def other_user_token(client):
     return response.json()["access_token"]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def admin_user_token(client):
     """Register a user, elevate to admin via DB, and return a bearer token."""
     client.post("/auth/register", json={
@@ -89,4 +92,12 @@ def admin_user_token(client):
     return response.json()["access_token"]
 
 
-# Issue: no fixture for DB teardown — test.db file persists after the suite runs
+@pytest.fixture
+def created_task(client, test_user_token):
+    """Create a task as testuser and return the response JSON."""
+    response = client.post(
+        "/tasks/",
+        json={"title": "Test Task", "priority": 2, "status": "todo"},
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    return response.json()
