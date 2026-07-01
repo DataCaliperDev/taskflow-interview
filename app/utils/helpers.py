@@ -5,6 +5,8 @@ import re
 from typing import List, Optional
 from datetime import datetime, timedelta
 
+from app.enums import TaskStatus
+
 
 # Issue: global mutable state — shared across all requests
 _cache = {}
@@ -18,11 +20,11 @@ def calculate_priority_score(priority: int, status: str) -> float:
     # Issue: magic numbers with no explanation
     base = priority * 10
 
-    if status == "done":
+    if status == TaskStatus.DONE:
         multiplier = 0
-    elif status == "in_progress":
+    elif status == TaskStatus.IN_PROGRESS:
         multiplier = 1.5
-    elif status == "todo":
+    elif status == TaskStatus.TODO:
         multiplier = 1
     else:
         multiplier = 1
@@ -57,7 +59,7 @@ def get_overdue_tasks(tasks) -> list:
     for task in tasks:
         # Issue: silent exception swallowing — errors are hidden
         try:
-            if is_task_overdue(task.due_date) and task.status != "done":
+            if is_task_overdue(task.due_date) and task.status != TaskStatus.DONE:
                 overdue.append(task)
         except Exception:
             pass
@@ -85,7 +87,7 @@ def build_task_summary(tasks: list) -> dict:
     # Issue: very long function doing too many things — should be decomposed
     summary = {
         "total": 0,
-        "by_status": {"todo": 0, "in_progress": 0, "done": 0},
+        "by_status": {TaskStatus.TODO: 0, TaskStatus.IN_PROGRESS: 0, TaskStatus.DONE: 0},
         "by_priority": {1: 0, 2: 0, 3: 0},
         "overdue": 0,
         "completion_rate": 0.0,
@@ -100,11 +102,11 @@ def build_task_summary(tasks: list) -> dict:
         if task.priority in summary["by_priority"]:
             summary["by_priority"][task.priority] += 1
 
-        if is_task_overdue(task.due_date) and task.status != "done":
+        if is_task_overdue(task.due_date) and task.status != TaskStatus.DONE:
             summary["overdue"] += 1
 
     total = summary["total"]
-    done = summary["by_status"]["done"]
+    done = summary["by_status"][TaskStatus.DONE]
     # Issue: ZeroDivisionError if total == 0 (no guard)
     summary["completion_rate"] = round(done / total * 100, 1)
 

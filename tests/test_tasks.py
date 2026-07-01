@@ -5,6 +5,8 @@ Tests for the /tasks endpoints.
 """
 
 import pytest
+from sqlalchemy import event
+from tests.conftest import engine
 
 
 # Issue: test depends on the order in which tests run (relies on task created by test_create_task)
@@ -152,8 +154,29 @@ def test_admin_can_delete_any_task(client, test_user_token, admin_user_token):
     assert response.status_code == 200
 
 
+def test_summary_by_user_no_n_plus_1(client, test_user_token):
+    # By this point the DB has at least 3 users (testuser, otheruser, adminuser).
+    # The old N+1 implementation would fire 1 (users) + N (tasks per user) queries.
+    # The new aggregation must fire exactly 2: 1 for auth + 1 LEFT JOIN aggregation.
+    queries = []
+
+    def on_query(conn, cursor, statement, parameters, context, executemany):
+        queries.append(statement)
+
+    event.listen(engine, "before_cursor_execute", on_query)
+    try:
+        response = client.get(
+            "/tasks/summary/by-user",
+            headers={"Authorization": f"Bearer {test_user_token}"},
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", on_query)
+
+    assert response.status_code == 200
+    assert len(queries) == 2
+
+
 # Issue: no test for the search endpoint
-# Issue: no test for the /summary/by-user endpoint
 # Issue: no test for unauthorized access (missing auth header)
 # Issue: no test for invalid inputs (e.g., priority=99, status="invalid")
 # Issue: no test for adding/retrieving comments

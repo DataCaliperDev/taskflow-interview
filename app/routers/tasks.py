@@ -3,13 +3,13 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import case, func, text
 
 from app import errors, models, schemas
 from app.database import get_db
-from app.enums import UserRole
+from app.enums import TaskStatus, UserRole
 from app.routers.auth import get_current_active_user
-from app.utils.helpers import calculate_priority_score, parse_tags
+from app.utils.helpers import parse_tags
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -122,23 +122,37 @@ def task_summary_by_user(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Return each user's task count and average priority score."""
-    users = db.query(models.User).all()
-    result = []
+    # Previously: 1 query for all users + 1 query per user for their tasks (N+1).
+    # Fix: single LEFT JOIN with SQL aggregation computes task_count and avg_priority_score
+    # in the database, mirroring calculate_priority_score's formula (priority * 10 * multiplier).
+    # Note: this endpoint is not called anywhere in the frontend (dead API).
+    priority_score = case(
+        (models.Task.status == TaskStatus.DONE, 0),
+        (models.Task.status == TaskStatus.IN_PROGRESS, models.Task.priority * 15),
+        else_=models.Task.priority * 10,
+    )
 
-    for user in users:
-        # Issue: N+1 query — one extra SELECT per user instead of a single JOIN/aggregation
-        tasks = db.query(models.Task).filter(models.Task.owner_id == user.id).all()
-        scores = [calculate_priority_score(t.priority, t.status) for t in tasks]
-        avg_score = sum(scores) / len(scores) if scores else 0   # Issue: ZeroDivisionError if len == 0 (handled here, but pattern is fragile)
+    rows = (
+        db.query(
+            models.User.id.label("user_id"),
+            models.User.username,
+            func.count(models.Task.id).label("task_count"),
+            func.coalesce(func.avg(priority_score), 0.0).label("avg_priority_score"),
+        )
+        .outerjoin(models.Task, models.Task.owner_id == models.User.id)
+        .group_by(models.User.id, models.User.username)
+        .all()
+    )
 
-        result.append({
-            "user_id": user.id,
-            "username": user.username,
-            "task_count": len(tasks),
-            "avg_priority_score": round(avg_score, 2),
-        })
-
-    return result
+    return [
+        {
+            "user_id": row.user_id,
+            "username": row.username,
+            "task_count": row.task_count,
+            "avg_priority_score": round(row.avg_priority_score, 2),
+        }
+        for row in rows
+    ]
 
 
 @router.post("/{task_id}/comments", response_model=schemas.CommentOut)
