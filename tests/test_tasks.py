@@ -116,7 +116,8 @@ def test_update_task_by_non_owner_is_forbidden(client, test_user_token, other_us
         json={"title": "Hijacked"},
         headers={"Authorization": f"Bearer {other_user_token}"},
     )
-    assert response.status_code == 403
+    # 404 rather than 403: non-owners must not be able to enumerate task IDs
+    assert response.status_code == 404
 
 
 def test_delete_task_by_non_owner_is_forbidden(client, test_user_token, other_user_token):
@@ -129,7 +130,8 @@ def test_delete_task_by_non_owner_is_forbidden(client, test_user_token, other_us
         f"/tasks/{task['id']}",
         headers={"Authorization": f"Bearer {other_user_token}"},
     )
-    assert response.status_code == 403
+    # 404 rather than 403: non-owners must not be able to enumerate task IDs
+    assert response.status_code == 404
 
 
 def test_admin_can_update_any_task(client, test_user_token, admin_user_token):
@@ -160,8 +162,16 @@ def test_admin_can_delete_any_task(client, test_user_token, admin_user_token):
 
 
 def test_summary_by_user_no_n_plus_1(client, test_user_token):
-    # The old N+1 implementation fired 1 (users SELECT) + N (tasks per user) queries.
-    # The new aggregation fires exactly 2: 1 for auth + 1 LEFT JOIN aggregation.
+    # Create 3 extra users so N+1 would fire at least 5 queries (1 auth + 1 users
+    # SELECT + 4 per-user task SELECTs). The aggregation stays at 2 regardless.
+    # Asserting <= 3 catches N+1 without being brittle to SQLAlchemy internals.
+    for i in range(3):
+        client.post("/auth/register", json={
+            "username": f"extrauser{i}",
+            "email": f"extra{i}@example.com",
+            "password": "extrapass",
+        })
+
     queries = []
 
     def on_query(conn, cursor, statement, parameters, context, executemany):
@@ -177,7 +187,8 @@ def test_summary_by_user_no_n_plus_1(client, test_user_token):
         event.remove(engine, "before_cursor_execute", on_query)
 
     assert response.status_code == 200
-    assert len(queries) == 2
+    # N+1 with 4 users = 6+ queries; aggregation = 2. Ceiling of 3 distinguishes them.
+    assert len(queries) <= 3
 
 
 def test_list_tasks_requires_auth(client):

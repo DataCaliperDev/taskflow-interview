@@ -9,7 +9,7 @@ from app import errors, models, schemas
 from app.database import get_db
 from app.enums import TaskStatus, UserRole
 from app.routers.auth import get_current_active_user
-from app.utils.helpers import parse_tags
+from app.utils.helpers import parse_tags, SCORE_BASE, SCORE_MULTIPLIER_IN_PROGRESS
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -81,12 +81,17 @@ def update_task(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    # Admins can act on any task; non-owners get 404 (not 403) so task IDs are not enumerable.
+    if current_user.role == UserRole.ADMIN:
+        task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    else:
+        task = db.query(models.Task).filter(
+            models.Task.id == task_id,
+            models.Task.owner_id == current_user.id,
+        ).first()
+
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
-
-    if task.owner_id != current_user.id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=errors.NOT_AUTHORIZED)
 
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -103,12 +108,17 @@ def delete_task(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    # Admins can act on any task; non-owners get 404 (not 403) so task IDs are not enumerable.
+    if current_user.role == UserRole.ADMIN:
+        task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    else:
+        task = db.query(models.Task).filter(
+            models.Task.id == task_id,
+            models.Task.owner_id == current_user.id,
+        ).first()
+
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=errors.TASK_NOT_FOUND)
-
-    if task.owner_id != current_user.id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=errors.NOT_AUTHORIZED)
 
     db.delete(task)
     db.commit()
@@ -128,8 +138,8 @@ def task_summary_by_user(
     # Note: this endpoint is not called anywhere in the frontend (dead API).
     priority_score = case(
         (models.Task.status == TaskStatus.DONE, 0),
-        (models.Task.status == TaskStatus.IN_PROGRESS, models.Task.priority * 15),
-        else_=models.Task.priority * 10,
+        (models.Task.status == TaskStatus.IN_PROGRESS, models.Task.priority * SCORE_BASE * SCORE_MULTIPLIER_IN_PROGRESS),
+        else_=models.Task.priority * SCORE_BASE,
     )
 
     rows = (

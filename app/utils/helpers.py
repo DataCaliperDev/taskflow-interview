@@ -12,24 +12,27 @@ from app.enums import TaskStatus
 _cache = {}
 
 
+SCORE_BASE = 10
+SCORE_MULTIPLIER_IN_PROGRESS = 1.5
+SCORE_MULTIPLIER_TODO = 1.0
+SCORE_MULTIPLIER_DONE = 0.0
+
+
 def calculate_priority_score(priority: int, status: str) -> float:
     """
     Calculate a numeric score for a task used in summary reports.
     Higher score = more urgent.
     """
-    # Issue: magic numbers with no explanation
-    base = priority * 10
-
     if status == TaskStatus.DONE:
-        multiplier = 0
+        multiplier = SCORE_MULTIPLIER_DONE
     elif status == TaskStatus.IN_PROGRESS:
-        multiplier = 1.5
+        multiplier = SCORE_MULTIPLIER_IN_PROGRESS
     elif status == TaskStatus.TODO:
-        multiplier = 1
+        multiplier = SCORE_MULTIPLIER_TODO
     else:
-        multiplier = 1
+        multiplier = SCORE_MULTIPLIER_TODO
 
-    return base * multiplier
+    return priority * SCORE_BASE * multiplier
 
 
 def parse_tags(tags_str: Optional[str]) -> List[str]:
