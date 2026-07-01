@@ -1,6 +1,7 @@
 # app/routers/auth.py
 
 import bcrypt
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -23,7 +24,15 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+    except ValueError:
+        return False
+
+
+def _is_md5(hash_str: str) -> bool:
+    # bcrypt hashes always start with $2b$; anything else is legacy
+    return not hash_str.startswith("$2b$")
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -72,9 +81,25 @@ def login(
         models.User.username == form_data.username
     ).first()
 
-    if not user or not verify_password(form_data.password, user.password_hash):
-        # Issue: identical error for "user not found" vs "wrong password" is correct,
-        # but the response leaks timing info — no constant-time comparison
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=errors.INCORRECT_CREDENTIALS,
+        )
+
+    if _is_md5(user.password_hash):
+        # Lazy migration: user was created before the bcrypt upgrade and still
+        # has an MD5 hash. Verify against MD5, then silently re-hash with bcrypt
+        # so the next login goes through the normal path. No forced reset needed.
+        md5_digest = hashlib.md5(form_data.password.encode()).hexdigest()
+        if md5_digest != user.password_hash:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=errors.INCORRECT_CREDENTIALS,
+            )
+        user.password_hash = hash_password(form_data.password)
+        db.commit()
+    elif not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=errors.INCORRECT_CREDENTIALS,
