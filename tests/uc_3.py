@@ -261,3 +261,36 @@ def test_member_delete_task_owned_by_other(client, db_session, test_bob_token):
     assert response.status_code == 403
     response_data = response.json()
     assert response_data["detail"] == "Not authorized to view this task"
+
+
+# Check if member can delete another member
+def test_member_delete_another_member(client, db_session, test_bob_token):
+    carol = db_session.query(User).filter(User.username == "carol").first()
+
+    # Bob deletes Carol
+    response = client.delete(
+        f"/users/{carol.id}",
+        headers={"Authorization": f"Bearer {test_bob_token}"},
+    )
+
+    assert response.status_code == 403
+    # Check if Carol is deleted from the database
+    carol = db_session.query(User).filter(User.username == "carol").first()
+    assert carol is not None
+
+
+# Check if admin can delete a member
+def test_admin_delete_member(client, db_session, test_admin_token):
+    bob = db_session.query(User).filter(User.username == "bob").first()
+
+    # Admin deletes Bob
+    response = client.delete(
+        f"/users/{bob.id}",
+        headers={"Authorization": f"Bearer {test_admin_token}"},
+    )
+
+    assert response.status_code == 204
+
+    # Check if Bob is deleted from the database
+    deleted_bob = db_session.query(User).filter(User.id == bob.id).first()
+    assert deleted_bob is None
