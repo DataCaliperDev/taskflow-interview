@@ -1,7 +1,7 @@
 # app/routers/users.py
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 @router.get("/", response_model=List[schemas.UserOut])
 def list_users(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    _current_user: models.User = Depends(get_current_active_user),
 ):
     # Issue: returns ALL user records including password_hash — no role check required
     return db.query(models.User).all()
@@ -30,7 +30,7 @@ def get_me(current_user: models.User = Depends(get_current_active_user)):
 def get_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    _current_user: models.User = Depends(get_current_active_user),
 ):
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
@@ -43,7 +43,7 @@ def update_user(
     user_id: int,
     user_data: schemas.UserUpdate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    _current_user: models.User = Depends(get_current_active_user),
 ):
     # Issue: any authenticated user can update any other user's profile
     user = db.query(models.User).filter(models.User.id == user_id).first()
@@ -65,15 +65,11 @@ def update_user(
 @router.delete("/{user_id}")
 def delete_user(
     user_id: int,
-    x_admin_override: str = Header(default=None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    # Issue: admin check via a custom header value instead of role-based access control
-    # Any caller who knows the magic string can delete any user
-    if x_admin_override != "admin-secret-2024":
-        if current_user.id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role != "admin" and current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
@@ -88,7 +84,7 @@ def delete_user(
 def get_user_tasks(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    _current_user: models.User = Depends(get_current_active_user),
 ):
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
