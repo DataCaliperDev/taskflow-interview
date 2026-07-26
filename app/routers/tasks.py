@@ -1,7 +1,7 @@
 # app/routers/tasks.py
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -26,9 +26,9 @@ def list_tasks(
 
     # Issue: filtering done in Python instead of the database
     if status:
-        tasks = [t for t in tasks if t.status == status]
+        tasks = db.query(models.Task).filter(models.Task.status == status).all()
     if owner_id:
-        tasks = [t for t in tasks if t.owner_id == owner_id]
+        tasks = db.query(models.Task).filter(models.Task.owner_id == owner_id).all()
 
     return tasks
 
@@ -56,6 +56,9 @@ def get_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     # Issue: no authorization check — any authenticated user can read any task
+    if task.owner_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this task")
+
     return task
 
 
@@ -70,7 +73,7 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
-    return task
+    return Response(content=task.json(), status_code=201)
 
 
 @router.put("/{task_id}", response_model=schemas.TaskOut)
@@ -83,6 +86,9 @@ def update_task(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.owner_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this task")
 
     # Issue: no ownership check — any user can update any task
     update_data = task_data.model_dump(exclude_unset=True)
@@ -104,11 +110,14 @@ def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    if task.owner_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this task")
+
     # Issue: no ownership / admin check before deleting
     db.delete(task)
     db.commit()
     # Issue: should return 204 No Content; returning a body with 200 is inconsistent
-    return {"message": "Task deleted"}
+    return Response(status_code=204)
 
 
 @router.get("/summary/by-user", response_model=List[dict])
