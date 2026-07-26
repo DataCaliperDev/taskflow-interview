@@ -24,7 +24,7 @@ def list_tasks(
     # Issue: No pagination — returns ALL rows; will break under load
     tasks = db.query(models.Task).all()
 
-    # Issue: filtering done in Python instead of the database
+    # Solved: filtering by SQLAlchemy ORM
     if status:
         tasks = db.query(models.Task).filter(models.Task.status == status).all()
     if owner_id:
@@ -55,7 +55,7 @@ def get_task(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    # Issue: no authorization check — any authenticated user can read any task
+    # Solved: Enforce that a user can only get their own tasks (admins may act on any task).
     if task.owner_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Not authorized to view this task")
 
@@ -63,7 +63,6 @@ def get_task(
 
 
 @router.post("/", response_model=schemas.TaskOut, status_code=200)
-# Issue: should return 201 Created
 def create_task(
     task_data: schemas.TaskCreate,
     db: Session = Depends(get_db),
@@ -87,10 +86,10 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Solved: Enforce that a user can only update their own tasks (admins may act on any task).
     if task.owner_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Not authorized to view this task")
 
-    # Issue: no ownership check — any user can update any task
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -110,13 +109,12 @@ def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Solved: Enforce that a user can only delete their own tasks (admins may act on any task).
     if task.owner_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Not authorized to view this task")
 
-    # Issue: no ownership / admin check before deleting
     db.delete(task)
     db.commit()
-    # Issue: should return 204 No Content; returning a body with 200 is inconsistent
     return Response(status_code=204)
 
 
