@@ -1,7 +1,7 @@
 # app/routers/users.py
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Response
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -65,13 +65,11 @@ def update_user(
 @router.delete("/{user_id}")
 def delete_user(
     user_id: int,
-    x_admin_override: str = Header(default=None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    # Issue: admin check via a custom header value instead of role-based access control
-    # Any caller who knows the magic string can delete any user
-    if x_admin_override != "admin-secret-2024":
+    # Solved: Replace the `X-Admin-Override` header check with proper role-based authorization (`role == "admin"`)
+    if current_user.role != "admin":
         if current_user.id != user_id:
             raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -81,7 +79,7 @@ def delete_user(
 
     db.delete(user)
     db.commit()
-    return {"message": "User deleted"}
+    return Response(status_code=204)
 
 
 @router.get("/{user_id}/tasks", response_model=List[schemas.TaskOut])
