@@ -22,7 +22,7 @@ def test_get_task_as_admin(client, db_session, test_admin_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    bob_1st_task = response_content[0]
+    bob_1st_task = response_content['items'][0]
 
     # Get detail of the first task owned by bob
     response = client.get(
@@ -47,7 +47,7 @@ def test_update_task_as_admin(client, db_session, test_admin_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    bob_1st_task = response_content[0]
+    bob_1st_task = response_content['items'][0]
 
     # Update the task as admin
     response = client.put(
@@ -76,7 +76,7 @@ def test_delete_task_as_admin(client, db_session, test_admin_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    bob_1st_task = response_content[0]
+    bob_1st_task = response_content['items'][0]
 
     # Update the task as admin
     response = client.delete(
@@ -100,7 +100,7 @@ def test_member_get_their_own_task(client, db_session, test_bob_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    bob_1st_task = response_content[0]
+    bob_1st_task = response_content['items'][0]
 
     # Get detail of the first task owned by carol
     response = client.get(
@@ -126,7 +126,7 @@ def test_member_update_their_own_task(client, db_session, test_bob_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    bob_1st_task = response_content[0]
+    bob_1st_task = response_content['items'][0]
 
     # Get detail of the first task owned by carol
     response = client.get(
@@ -160,7 +160,7 @@ def test_member_delete_their_own_task(client, db_session, test_bob_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    bob_1st_task = response_content[0]
+    bob_1st_task = response_content['items'][0]
 
     # Get detail of the first task owned by carol
     response = client.get(
@@ -188,7 +188,7 @@ def test_member_get_task_owned_by_other(client, db_session, test_bob_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    carol_1st_task = response_content[0]
+    carol_1st_task = response_content['items'][0]
 
     # Get detail of the first task owned by carol
     response = client.get(
@@ -213,7 +213,7 @@ def test_member_update_task_owned_by_other(client, db_session, test_bob_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    carol_1st_task = response_content[0]
+    carol_1st_task = response_content['items'][0]
 
     # Get detail of the first task owned by carol
     response = client.get(
@@ -246,7 +246,7 @@ def test_member_delete_task_owned_by_other(client, db_session, test_bob_token):
 
     assert response.status_code == 200
     response_content = response.json()
-    carol_1st_task = response_content[0]
+    carol_1st_task = response_content['items'][0]
 
     # Get detail of the first task owned by carol
     response = client.get(
