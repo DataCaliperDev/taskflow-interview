@@ -82,4 +82,40 @@ def test_user_token(client):
     return response.json()["access_token"]
 
 
+@pytest.fixture(scope="module")
+def test_admin_token(client):
+    # Authenticate as admin (alice)
+    response = client.post("/auth/login", data={
+        "username": "alice",
+        "password": "alice123"
+    })
+    response_content = response.json()
+    token = response_content.get("access_token")
+    return token
+
+
+@pytest.fixture(scope="module")
+def test_bob_token(client):
+    # Authenticate  a member (bob)
+    response = client.post("/auth/login", data={
+        "username": "bob",
+        "password": "bob123"
+    })
+    response_content = response.json()
+    token = response_content.get("access_token")
+    return token
+
+
+@pytest.fixture(scope="module")
+def test_carol_token(client):
+    # Authenticate  a member (bob)
+    response = client.post("/auth/login", data={
+        "username": "carol",
+        "password": "carol123"
+    })
+    response_content = response.json()
+    token = response_content.get("access_token")
+    return token
+
+
 # Issue: no fixture for DB teardown — test.db file persists after the suite runs
