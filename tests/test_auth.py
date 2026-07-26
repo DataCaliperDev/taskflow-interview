@@ -4,56 +4,102 @@
 Tests for the /auth endpoints.
 """
 
+from app.routers.auth import hash_password, verify_password
+
+
+def test_password_hash_is_not_plaintext_and_verifies():
+    plain_password = "super-secret-password-123"
+    hashed_password = hash_password(plain_password)
+
+    assert hashed_password != plain_password
+    assert hashed_password.startswith("$2")
+    assert verify_password(plain_password, hashed_password)
+    assert not verify_password("wrong-password", hashed_password)
+
 
 def test_register(client):
-    response = client.post("/auth/register", json={
-        "username": "newuser",
-        "email": "new@example.com",
-        "password": "pass",   # Issue: tests should not use trivially weak passwords — masks validation gaps
-    })
+    response = client.post(
+        "/auth/register",
+        json={
+            "username": "newuser",
+            "email": "new@example.com",
+            "password": "pass12345",
+        },
+    )
     assert response.status_code == 200
-    # Issue: response includes password_hash — test doesn't assert this field is absent
+    data = response.json()
+    assert data["username"] == "newuser"
+    assert data["email"] == "new@example.com"
+    assert data["is_active"] is True
+    assert data["role"] == "member"
+    assert "password_hash" not in data
 
 
 def test_register_duplicate_email(client):
-    client.post("/auth/register", json={
-        "username": "dupuser",
-        "email": "dup@example.com",
-        "password": "pass123",
-    })
-    response = client.post("/auth/register", json={
-        "username": "dupuser2",
-        "email": "dup@example.com",
-        "password": "pass456",
-    })
+    client.post(
+        "/auth/register",
+        json={
+            "username": "dupuser",
+            "email": "dup@example.com",
+            "password": "pass12345",
+        },
+    )
+    response = client.post(
+        "/auth/register",
+        json={
+            "username": "dupuser2",
+            "email": "dup@example.com",
+            "password": "pass45678",
+        },
+    )
     assert response.status_code == 400
+    assert response.json()["detail"] == "Email already registered"
 
 
 def test_login_success(client):
-    client.post("/auth/register", json={
-        "username": "loginuser",
-        "email": "login@example.com",
-        "password": "mypassword",
-    })
-    response = client.post("/auth/login", data={
-        "username": "loginuser",
-        "password": "mypassword",
-    })
+    client.post(
+        "/auth/register",
+        json={
+            "username": "loginuser",
+            "email": "login@example.com",
+            "password": "mypassword",
+        },
+    )
+    response = client.post(
+        "/auth/login",
+        data={
+            "username": "loginuser",
+            "password": "mypassword",
+        },
+    )
     assert response.status_code == 200
-    assert "access_token" in response.json()
-    # Issue: doesn't assert token_type == "bearer"
-    # Issue: doesn't verify the token is actually a valid JWT
+    data = response.json()
+    assert data["token_type"] == "bearer"
+    assert isinstance(data["access_token"], str)
+    assert len(data["access_token"]) > 10
 
 
 def test_login_wrong_password(client):
-    response = client.post("/auth/login", data={
-        "username": "loginuser",
-        "password": "wrongpassword",
-    })
+    client.post(
+        "/auth/register",
+        json={
+            "username": "wrongpassuser",
+            "email": "wrongpass@example.com",
+            "password": "mypassword",
+        },
+    )
+    response = client.post(
+        "/auth/login",
+        data={
+            "username": "wrongpassuser",
+            "password": "wrongpassword",
+        },
+    )
     assert response.status_code == 401
+    assert response.json()["detail"] == "Incorrect username or password"
 
 
-# Issue: no test for accessing a protected route without a token
-# Issue: no test for accessing a protected route with an expired token
-# Issue: no test for registering with a missing field (e.g., no email)
-# Issue: no test for duplicate username registration
+def test_protected_route_requires_token(client):
+    response = client.get("/users/me")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated"

@@ -3,14 +3,18 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import case, func, text
 
 from app import models, schemas
 from app.database import get_db
 from app.routers.auth import get_current_active_user
-from app.utils.helpers import calculate_priority_score, parse_tags
+from app.utils.helpers import parse_tags
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+def _can_manage_task(task: models.Task, current_user: models.User) -> bool:
+    return current_user.role == "admin" or task.owner_id == current_user.id
 
 
 @router.get("/", response_model=List[schemas.TaskOut])
@@ -18,7 +22,7 @@ def list_tasks(
     status: Optional[str] = None,
     owner_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    _current_user: models.User = Depends(get_current_active_user),
 ):
     """Return all tasks. Optionally filter by status or owner."""
     # Issue: No pagination — returns ALL rows; will break under load
@@ -37,7 +41,7 @@ def list_tasks(
 def search_tasks(
     q: str = Query(..., description="Search term"),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    _current_user: models.User = Depends(get_current_active_user),
 ):
     """Search tasks by title."""
     # Issue: raw SQL built with string formatting — SQL injection vulnerability
@@ -55,7 +59,8 @@ def get_task(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    # Issue: no authorization check — any authenticated user can read any task
+    if not _can_manage_task(task, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized")
     return task
 
 
@@ -84,7 +89,9 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership check — any user can update any task
+    if not _can_manage_task(task, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -104,7 +111,9 @@ def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership / admin check before deleting
+    if not _can_manage_task(task, current_user):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
     db.delete(task)
     db.commit()
     # Issue: should return 204 No Content; returning a body with 200 is inconsistent
@@ -114,26 +123,38 @@ def delete_task(
 @router.get("/summary/by-user", response_model=List[dict])
 def task_summary_by_user(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    _current_user: models.User = Depends(get_current_active_user),
 ):
     """Return each user's task count and average priority score."""
-    users = db.query(models.User).all()
-    result = []
+    # Original N+1 pattern loaded tasks one user at a time; this single
+    # aggregation query returns every user's task count and average score in one round-trip.
+    score_expr = case(
+        (models.Task.status == "done", 0),
+        (models.Task.status == "in_progress", models.Task.priority * 15),
+        else_=models.Task.priority * 10,
+    )
 
-    for user in users:
-        # Issue: N+1 query — one extra SELECT per user instead of a single JOIN/aggregation
-        tasks = db.query(models.Task).filter(models.Task.owner_id == user.id).all()
-        scores = [calculate_priority_score(t.priority, t.status) for t in tasks]
-        avg_score = sum(scores) / len(scores) if scores else 0   # Issue: ZeroDivisionError if len == 0 (handled here, but pattern is fragile)
+    rows = (
+        db.query(
+            models.User.id.label("user_id"),
+            models.User.username.label("username"),
+            func.count(models.Task.id).label("task_count"),
+            func.coalesce(func.avg(score_expr), 0).label("avg_priority_score"),
+        )
+        .outerjoin(models.Task, models.Task.owner_id == models.User.id)
+        .group_by(models.User.id, models.User.username)
+        .all()
+    )
 
-        result.append({
-            "user_id": user.id,
-            "username": user.username,
-            "task_count": len(tasks),
-            "avg_priority_score": round(avg_score, 2),
-        })
-
-    return result
+    return [
+        {
+            "user_id": row.user_id,
+            "username": row.username,
+            "task_count": row.task_count,
+            "avg_priority_score": round(float(row.avg_priority_score), 2),
+        }
+        for row in rows
+    ]
 
 
 @router.post("/{task_id}/comments", response_model=schemas.CommentOut)
@@ -162,7 +183,7 @@ def add_comment(
 def get_task_tags(
     task_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    _current_user: models.User = Depends(get_current_active_user),
 ):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:

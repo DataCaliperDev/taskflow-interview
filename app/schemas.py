@@ -35,7 +35,6 @@ class UserOut(BaseModel):
     id: int
     username: str
     email: str
-    password_hash: str   # Issue: password hash is exposed in the response schema
     is_active: bool
     role: str
     created_at: datetime
