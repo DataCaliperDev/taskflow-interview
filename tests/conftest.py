@@ -1,6 +1,12 @@
 # tests/conftest.py
 
 import pytest
+
+from dotenv import load_dotenv
+
+load_dotenv(".env.test", override=True)
+
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,6 +20,32 @@ TEST_DATABASE_URL = "sqlite:///./test.db"
 
 engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_database():
+    """Create tables once per test session."""
+    Base.metadata.create_all(bind=engine)
+    import scripts.seed_data
+    yield
+    Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(scope="function")
+def db_session():
+    """Wraps each individual test in an isolated transaction block."""
+    connection = engine.connect()
+    transaction = connection.begin()
+    # Bind a session to the active connection
+    session = TestingSessionLocal(bind=connection)
+
+    yield session
+
+    # Roll back everything done during the test execution
+    session.close()
+    transaction.rollback()
+    connection.close()
+
 
 Base.metadata.create_all(bind=engine)
 
