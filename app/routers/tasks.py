@@ -2,7 +2,8 @@
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only, joinedload
+
 from sqlalchemy import text
 
 from app import models, schemas
@@ -124,12 +125,47 @@ def task_summary_by_user(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Return each user's task count and average priority score."""
-    users = db.query(models.User).all()
+
+    # Solved: fetch all required data in a single query using SQLAlchemy's `joinedload`
+    users = (
+        db.query(models.User)
+        .options(load_only(models.User.id, models.User.username))
+        .options(joinedload(models.User.tasks).load_only(models.Task.priority, models.Task.status))
+    )
+    """
+    Previously, the code loaded all users and then executed an additional
+    SELECT query for each user's tasks inside the loop. For N users, this
+    resulted in 1 + N database queries, which scales poorly.
+
+    Using joinedload() eagerly loads each user's related tasks in the same
+    database query via a LEFT OUTER JOIN. As a result, user.tasks is already
+    populated, eliminating the extra queries while preserving the same application logic.
+    """
+    """
+    Here is the SQL query after using joinedload:
+    SELECT
+        users.id AS users_id, users.username AS users_username,
+        users.email AS users_email,
+        users.password_hash AS users_password_hash,
+        users.is_active AS users_is_active, users.role AS users_role,
+        users.created_at AS users_created_at,
+        tasks_1.id AS tasks_1_id,
+        tasks_1.title AS tasks_1_title,
+        tasks_1.description AS tasks_1_description,
+        tasks_1.status AS tasks_1_status,
+        tasks_1.priority AS tasks_1_priority,
+        tasks_1.owner_id AS tasks_1_owner_id,
+        tasks_1.created_at AS tasks_1_created_at,
+        tasks_1.due_date AS tasks_1_due_date,
+        tasks_1.tags AS tasks_1_tags
+
+    FROM users LEFT OUTER JOIN tasks AS tasks_1 ON users.id = tasks_1.owner_id
+    """
+
     result = []
 
     for user in users:
-        # Issue: N+1 query — one extra SELECT per user instead of a single JOIN/aggregation
-        tasks = db.query(models.Task).filter(models.Task.owner_id == user.id).all()
+        tasks = user.tasks
         scores = [calculate_priority_score(t.priority, t.status) for t in tasks]
         avg_score = sum(scores) / len(scores) if scores else 0   # Issue: ZeroDivisionError if len == 0 (handled here, but pattern is fragile)
 
