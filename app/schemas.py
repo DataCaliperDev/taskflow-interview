@@ -1,8 +1,12 @@
 # app/schemas.py
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, field_validator
 from typing import Optional, List
 from datetime import datetime
+
+
+VALID_STATUSES = {"todo", "in_progress", "done"}
+VALID_PRIORITIES = {1, 2, 3}
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -20,9 +24,22 @@ class TokenData(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
-    email: str
+    email: EmailStr
     password: str
-    # Issue: no field-level validation — no min length, no email format check, no password strength
+
+    @field_validator("username")
+    @classmethod
+    def username_min_length(cls, v: str) -> str:
+        if len(v) < 3:
+            raise ValueError("username must be at least 3 characters long")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def password_min_length(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("password must be at least 8 characters long")
+        return v
 
 
 class UserUpdate(BaseModel):
@@ -70,6 +87,7 @@ class CommentOut(BaseModel):
 
 # ── Task ──────────────────────────────────────────────────────────────────────
 
+
 class TaskCreate(BaseModel):
     title: str
     description: Optional[str] = None
@@ -77,8 +95,27 @@ class TaskCreate(BaseModel):
     priority: Optional[int] = 2
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
-    # Issue: no validation that status is one of the valid values
-    # Issue: no validation that priority is 1, 2, or 3
+
+    @field_validator("title")
+    @classmethod
+    def title_min_length(cls, v: str) -> str:
+        if len(v.strip()) < 1:
+            raise ValueError("title must be at least 1 character long")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def status_must_be_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_STATUSES:
+            raise ValueError(f"status must be one of {sorted(VALID_STATUSES)}")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def priority_must_be_valid(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v not in VALID_PRIORITIES:
+            raise ValueError("priority must be 1, 2, or 3")
+        return v
 
 
 class TaskUpdate(BaseModel):
@@ -88,6 +125,27 @@ class TaskUpdate(BaseModel):
     priority: Optional[int] = None
     due_date: Optional[datetime] = None
     tags: Optional[str] = None
+
+    @field_validator("title")
+    @classmethod
+    def title_min_length(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and len(v.strip()) < 1:
+            raise ValueError("title must be at least 1 character long")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def status_must_be_valid(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_STATUSES:
+            raise ValueError(f"status must be one of {sorted(VALID_STATUSES)}")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def priority_must_be_valid(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v not in VALID_PRIORITIES:
+            raise ValueError("priority must be 1, 2, or 3")
+        return v
 
 
 class TaskOut(BaseModel):
