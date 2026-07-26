@@ -10,28 +10,43 @@ from app import models, schemas
 from app.database import get_db
 from app.routers.auth import get_current_active_user
 from app.utils.helpers import calculate_priority_score, parse_tags
+from app.utils.pagination import (
+    PaginationParams,
+    PaginatedResponse,
+    pagination_params,
+    paginate_query,
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@router.get("/", response_model=List[schemas.TaskOut])
+@router.get("/", response_model=PaginatedResponse[schemas.TaskOut])
 def list_tasks(
     status: Optional[str] = None,
     owner_id: Optional[int] = None,
     db: Session = Depends(get_db),
+    pagination: PaginationParams = Depends(pagination_params),
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Return all tasks. Optionally filter by status or owner."""
-    # Issue: No pagination — returns ALL rows; will break under load
-    tasks = db.query(models.Task).all()
+    # Solved: Implemented pagination by page and page_size
+    tasks = db.query(models.Task)
 
     # Solved: filtering by SQLAlchemy ORM
     if status:
-        tasks = db.query(models.Task).filter(models.Task.status == status).all()
+        tasks = db.query(models.Task).filter(models.Task.status == status)
     if owner_id:
-        tasks = db.query(models.Task).filter(models.Task.owner_id == owner_id).all()
+        tasks = db.query(models.Task).filter(models.Task.owner_id == owner_id)
 
-    return tasks
+    items, total, total_pages = paginate_query(db, tasks, pagination)
+
+    return PaginatedResponse(
+        items=items,
+        total=total,
+        page=pagination.page,
+        page_size=pagination.page_size,
+        total_pages=total_pages,
+    )
 
 
 @router.get("/search")
