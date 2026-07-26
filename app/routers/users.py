@@ -1,12 +1,18 @@
 # app/routers/users.py
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Header
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Header, Response
+from sqlalchemy.orm import Session, load_only, joinedload
 
 from app import models, schemas
 from app.database import get_db
 from app.routers.auth import get_current_active_user, hash_password
+from app.utils.pagination import (
+    PaginationParams,
+    PaginatedResponse,
+    pagination_params,
+    paginate_query,
+)
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -65,13 +71,11 @@ def update_user(
 @router.delete("/{user_id}")
 def delete_user(
     user_id: int,
-    x_admin_override: str = Header(default=None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    # Issue: admin check via a custom header value instead of role-based access control
-    # Any caller who knows the magic string can delete any user
-    if x_admin_override != "admin-secret-2024":
+    # Solved: Replace the `X-Admin-Override` header check with proper role-based authorization (`role == "admin"`)
+    if current_user.role != "admin":
         if current_user.id != user_id:
             raise HTTPException(status_code=403, detail="Not authorized")
 
@@ -81,19 +85,30 @@ def delete_user(
 
     db.delete(user)
     db.commit()
-    return {"message": "User deleted"}
+    return Response(status_code=204)
 
 
-@router.get("/{user_id}/tasks", response_model=List[schemas.TaskOut])
+@router.get("/{user_id}/tasks", response_model=PaginatedResponse[schemas.TaskOut])
 def get_user_tasks(
     user_id: int,
     db: Session = Depends(get_db),
+    pagination: PaginationParams = Depends(pagination_params),
     current_user: models.User = Depends(get_current_active_user),
 ):
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Issue: N+1 — each task's comments will be lazy-loaded separately
-    # Issue: No pagination — could return thousands of tasks
-    return user.tasks
+    # Solved: N+1 — each task's comments will be lazy-loaded separately
+    user_tasks = db.query(models.Task).filter(models.Task.owner_id == user_id)
+
+    # Solved: No pagination — could return thousands of tasks
+    items, total, total_pages = paginate_query(db, user_tasks, pagination)
+
+    return PaginatedResponse(
+        items=items,
+        total=total,
+        page=pagination.page,
+        page_size=pagination.page_size,
+        total_pages=total_pages,
+    )

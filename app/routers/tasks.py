@@ -1,36 +1,52 @@
 # app/routers/tasks.py
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy.orm import Session, load_only, joinedload
+
 from sqlalchemy import text
 
 from app import models, schemas
 from app.database import get_db
 from app.routers.auth import get_current_active_user
 from app.utils.helpers import calculate_priority_score, parse_tags
+from app.utils.pagination import (
+    PaginationParams,
+    PaginatedResponse,
+    pagination_params,
+    paginate_query,
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
-@router.get("/", response_model=List[schemas.TaskOut])
+@router.get("/", response_model=PaginatedResponse[schemas.TaskOut])
 def list_tasks(
     status: Optional[str] = None,
     owner_id: Optional[int] = None,
     db: Session = Depends(get_db),
+    pagination: PaginationParams = Depends(pagination_params),
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Return all tasks. Optionally filter by status or owner."""
-    # Issue: No pagination — returns ALL rows; will break under load
-    tasks = db.query(models.Task).all()
+    # Solved: Implemented pagination by page and page_size
+    tasks = db.query(models.Task)
 
-    # Issue: filtering done in Python instead of the database
+    # Solved: filtering by SQLAlchemy ORM
     if status:
-        tasks = [t for t in tasks if t.status == status]
+        tasks = db.query(models.Task).filter(models.Task.status == status)
     if owner_id:
-        tasks = [t for t in tasks if t.owner_id == owner_id]
+        tasks = db.query(models.Task).filter(models.Task.owner_id == owner_id)
 
-    return tasks
+    items, total, total_pages = paginate_query(db, tasks, pagination)
+
+    return PaginatedResponse(
+        items=items,
+        total=total,
+        page=pagination.page,
+        page_size=pagination.page_size,
+        total_pages=total_pages,
+    )
 
 
 @router.get("/search")
@@ -55,12 +71,14 @@ def get_task(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    # Issue: no authorization check — any authenticated user can read any task
+    # Solved: Enforce that a user can only get their own tasks (admins may act on any task).
+    if task.owner_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this task")
+
     return task
 
 
 @router.post("/", response_model=schemas.TaskOut, status_code=200)
-# Issue: should return 201 Created
 def create_task(
     task_data: schemas.TaskCreate,
     db: Session = Depends(get_db),
@@ -70,7 +88,7 @@ def create_task(
     db.add(task)
     db.commit()
     db.refresh(task)
-    return task
+    return Response(content=task.json(), status_code=201)
 
 
 @router.put("/{task_id}", response_model=schemas.TaskOut)
@@ -84,7 +102,10 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership check — any user can update any task
+    # Solved: Enforce that a user can only update their own tasks (admins may act on any task).
+    if task.owner_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this task")
+
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -104,11 +125,13 @@ def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership / admin check before deleting
+    # Solved: Enforce that a user can only delete their own tasks (admins may act on any task).
+    if task.owner_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this task")
+
     db.delete(task)
     db.commit()
-    # Issue: should return 204 No Content; returning a body with 200 is inconsistent
-    return {"message": "Task deleted"}
+    return Response(status_code=204)
 
 
 @router.get("/summary/by-user", response_model=List[dict])
@@ -117,12 +140,47 @@ def task_summary_by_user(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Return each user's task count and average priority score."""
-    users = db.query(models.User).all()
+
+    # Solved: fetch all required data in a single query using SQLAlchemy's `joinedload`
+    users = (
+        db.query(models.User)
+        .options(load_only(models.User.id, models.User.username))
+        .options(joinedload(models.User.tasks).load_only(models.Task.priority, models.Task.status))
+    )
+    """
+    Previously, the code loaded all users and then executed an additional
+    SELECT query for each user's tasks inside the loop. For N users, this
+    resulted in 1 + N database queries, which scales poorly.
+
+    Using joinedload() eagerly loads each user's related tasks in the same
+    database query via a LEFT OUTER JOIN. As a result, user.tasks is already
+    populated, eliminating the extra queries while preserving the same application logic.
+    """
+    """
+    Here is the SQL query after using joinedload:
+    SELECT
+        users.id AS users_id, users.username AS users_username,
+        users.email AS users_email,
+        users.password_hash AS users_password_hash,
+        users.is_active AS users_is_active, users.role AS users_role,
+        users.created_at AS users_created_at,
+        tasks_1.id AS tasks_1_id,
+        tasks_1.title AS tasks_1_title,
+        tasks_1.description AS tasks_1_description,
+        tasks_1.status AS tasks_1_status,
+        tasks_1.priority AS tasks_1_priority,
+        tasks_1.owner_id AS tasks_1_owner_id,
+        tasks_1.created_at AS tasks_1_created_at,
+        tasks_1.due_date AS tasks_1_due_date,
+        tasks_1.tags AS tasks_1_tags
+
+    FROM users LEFT OUTER JOIN tasks AS tasks_1 ON users.id = tasks_1.owner_id
+    """
+
     result = []
 
     for user in users:
-        # Issue: N+1 query — one extra SELECT per user instead of a single JOIN/aggregation
-        tasks = db.query(models.Task).filter(models.Task.owner_id == user.id).all()
+        tasks = user.tasks
         scores = [calculate_priority_score(t.priority, t.status) for t in tasks]
         avg_score = sum(scores) / len(scores) if scores else 0   # Issue: ZeroDivisionError if len == 0 (handled here, but pattern is fragile)
 
