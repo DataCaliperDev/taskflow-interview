@@ -112,6 +112,20 @@ class TaskUpdate(BaseModel):
     tags: Optional[str] = None
 
 
+class TaskSummaryRow(BaseModel):
+    """One row of GET /tasks/summary/by-user.
+
+    The endpoint previously declared List[dict], which documented nothing and
+    validated nothing. The four keys and their types are unchanged — this only
+    writes down the shape that was already being returned.
+    """
+
+    user_id: int
+    username: str
+    task_count: int
+    avg_priority_score: float
+
+
 class TaskOut(BaseModel):
     id: int
     title: str

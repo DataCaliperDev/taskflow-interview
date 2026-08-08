@@ -3,13 +3,13 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import case, func, text
 
 from app import models, schemas
 from app.database import get_db
 from app.permissions import require_owner_or_admin
 from app.routers.auth import get_current_active_user
-from app.utils.helpers import calculate_priority_score, parse_tags
+from app.utils.helpers import parse_tags
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -112,29 +112,59 @@ def delete_task(
     return {"message": "Task deleted"}
 
 
-@router.get("/summary/by-user", response_model=List[dict])
+@router.get("/summary/by-user", response_model=List[schemas.TaskSummaryRow])
 def task_summary_by_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """Return each user's task count and average priority score."""
-    users = db.query(models.User).all()
-    result = []
+    """Return each user's task count and average priority score.
 
-    for user in users:
-        # Issue: N+1 query — one extra SELECT per user instead of a single JOIN/aggregation
-        tasks = db.query(models.Task).filter(models.Task.owner_id == user.id).all()
-        scores = [calculate_priority_score(t.priority, t.status) for t in tasks]
-        avg_score = sum(scores) / len(scores) if scores else 0   # Issue: ZeroDivisionError if len == 0 (handled here, but pattern is fragile)
+    This used to load every user and then issue one SELECT per user to fetch
+    their tasks: 1 + N round trips that grew without bound (measured at 51
+    statements for 50 users). It is now a single LEFT JOIN aggregation, so the
+    cost is one statement however many users exist.
 
-        result.append({
-            "user_id": user.id,
-            "username": user.username,
-            "task_count": len(tasks),
+    The CASE below mirrors utils.helpers.calculate_priority_score. Restating the
+    formula in SQL is the price of aggregating in the database rather than
+    shipping every task row to the application; the parity test in
+    tests/test_summary.py fails if the two definitions ever drift apart.
+    """
+    # LEFT JOIN, not JOIN: users with no tasks belong in the report with zeroes,
+    # as they were under the old loop.
+    score = case(
+        (models.Task.status == "done", 0.0),
+        (models.Task.status == "in_progress", models.Task.priority * 15.0),
+        else_=models.Task.priority * 10.0,
+    )
+
+    rows = (
+        db.query(
+            models.User.id,
+            models.User.username,
+            # COUNT(tasks.id) rather than COUNT(*): the outer join pads users
+            # who own nothing with a NULL row, which COUNT(*) would score as 1.
+            func.count(models.Task.id),
+            # AVG over no rows is NULL, so restore the zero the loop produced.
+            func.coalesce(func.avg(score), 0.0),
+        )
+        .outerjoin(models.Task, models.Task.owner_id == models.User.id)
+        .group_by(models.User.id, models.User.username)
+        # The old version inherited insertion order by accident; make it a rule.
+        .order_by(models.User.id)
+        .all()
+    )
+
+    # Rounding stays in Python: round() is banker's rounding and SQL ROUND() is
+    # not, so moving it into the query would shift values on .005 boundaries.
+    return [
+        {
+            "user_id": user_id,
+            "username": username,
+            "task_count": task_count,
             "avg_priority_score": round(avg_score, 2),
-        })
-
-    return result
+        }
+        for user_id, username, task_count, avg_score in rows
+    ]
 
 
 @router.post("/{task_id}/comments", response_model=schemas.CommentOut)
