@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Database
+*.db
+
+# Secrets
+.env
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# Editor / OS
+.DS_Store
+.vscode/*

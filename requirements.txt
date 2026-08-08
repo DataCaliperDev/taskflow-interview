@@ -5,6 +5,11 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+# Pinned <5: passlib 1.7.4 probes its bcrypt backend with a >72-byte string,
+# which bcrypt 5 rejects instead of truncating. The backend loads lazily, so the
+# app still boots — register and login then 500 on every call. 4.1+ works but
+# logs a spurious "error reading bcrypt version" warning at startup.
+bcrypt==4.0.1
 python-multipart==0.0.12
 httpx==0.27.2
 pytest==8.3.3
