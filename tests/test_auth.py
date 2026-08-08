@@ -5,78 +5,169 @@ Tests for the /auth endpoints.
 """
 
 import hashlib
-import uuid
+from datetime import timedelta
+
+import pytest
+from jose import jwt
 
 from app import models
-from app.routers.auth import hash_password, verify_password
+from app.config import SECRET_KEY, ALGORITHM
+from app.routers.auth import create_access_token, hash_password, verify_password
+
+# Hardcoded names are safe again: the database is dropped and recreated for
+# every test, so nothing survives to collide with.
+PASSWORD = "correct-password"
 
 
-def _unique(prefix: str) -> str:
-    """Unique-per-run identifier.
-
-    username/email are UNIQUE and the suite reuses an on-disk test.db between
-    runs, so hardcoded names collide on a rerun. (Resetting the DB per test is
-    UC-12's scope.)
-    """
-    return f"{prefix}-{uuid.uuid4().hex[:8]}"
-
-
-def test_register(client):
-    # Names are generated per run: the suite keeps an on-disk test.db that is
-    # never reset, so a hardcoded email is already taken on the second run and
-    # register answers 400. Proper per-test teardown is UC-12's scope.
-    username = _unique("newuser")
-    response = client.post("/auth/register", json={
+def _register(client, username="newuser", **overrides):
+    payload = {
         "username": username,
         "email": f"{username}@example.com",
-        "password": "pass",   # Issue: tests should not use trivially weak passwords — masks validation gaps
-    })
+        "password": PASSWORD,
+    }
+    payload.update(overrides)
+    return client.post("/auth/register", json=payload)
+
+
+def test_register(client, db_session):
+    response = _register(client)
+
     assert response.status_code == 200
-    # Issue: response includes password_hash — test doesn't assert this field is absent
+    body = response.json()
+    assert body["username"] == "newuser"
+    assert body["email"] == "newuser@example.com"
+    assert body["role"] == "member"
+    assert body["is_active"] is True
+
+    stored = db_session.query(models.User).filter(
+        models.User.username == "newuser"
+    ).first()
+    assert stored is not None
+    assert stored.id == body["id"]
 
 
 def test_register_duplicate_email(client):
-    client.post("/auth/register", json={
-        "username": "dupuser",
-        "email": "dup@example.com",
-        "password": "pass123",
-    })
-    response = client.post("/auth/register", json={
-        "username": "dupuser2",
-        "email": "dup@example.com",
-        "password": "pass456",
-    })
+    _register(client, "first")
+
+    response = _register(client, "second", email="first@example.com")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Email already registered"
+
+
+@pytest.mark.xfail(
+    reason="register only checks the email; a duplicate username reaches the "
+           "database and raises IntegrityError. Adding the check belongs to the "
+           "input-validation use case.",
+    strict=True,
+)
+def test_register_duplicate_username(client):
+    _register(client, "taken")
+
+    response = _register(client, "taken", email="other@example.com")
+
     assert response.status_code == 400
 
 
+@pytest.mark.parametrize("missing", ["username", "email", "password"])
+def test_register_requires_every_field(client, missing):
+    payload = {
+        "username": "someone",
+        "email": "someone@example.com",
+        "password": PASSWORD,
+    }
+    del payload[missing]
+
+    assert client.post("/auth/register", json=payload).status_code == 422
+
+
 def test_login_success(client):
-    client.post("/auth/register", json={
-        "username": "loginuser",
-        "email": "login@example.com",
-        "password": "mypassword",
-    })
+    user = _register(client, "loginuser").json()
+
     response = client.post("/auth/login", data={
-        "username": "loginuser",
-        "password": "mypassword",
+        "username": "loginuser", "password": PASSWORD,
     })
+
     assert response.status_code == 200
-    assert "access_token" in response.json()
-    # Issue: doesn't assert token_type == "bearer"
-    # Issue: doesn't verify the token is actually a valid JWT
+    body = response.json()
+    assert body["token_type"] == "bearer"
+
+    # Decode rather than merely checking the key is present: a token that does
+    # not carry the right subject would satisfy the old assertion.
+    claims = jwt.decode(body["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
+    assert claims["sub"] == "loginuser"
+    assert "exp" in claims
+    assert user["id"]
 
 
 def test_login_wrong_password(client):
+    _register(client, "loginuser")
+
     response = client.post("/auth/login", data={
-        "username": "loginuser",
-        "password": "wrongpassword",
+        "username": "loginuser", "password": "wrongpassword",
     })
+
     assert response.status_code == 401
+    assert response.json()["detail"] == "Incorrect username or password"
 
 
-# Issue: no test for accessing a protected route without a token
-# Issue: no test for accessing a protected route with an expired token
-# Issue: no test for registering with a missing field (e.g., no email)
-# Issue: no test for duplicate username registration
+def test_login_unknown_user(client):
+    response = client.post("/auth/login", data={
+        "username": "nobody", "password": PASSWORD,
+    })
+
+    # Same message as a wrong password, so the response cannot be used to
+    # enumerate which usernames exist.
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Incorrect username or password"
+
+
+def test_an_inactive_user_cannot_use_their_token(client, db_session):
+    user = _register(client, "suspended").json()
+    token = client.post("/auth/login", data={
+        "username": "suspended", "password": PASSWORD,
+    }).json()["access_token"]
+
+    row = db_session.query(models.User).filter(
+        models.User.id == user["id"]
+    ).first()
+    row.is_active = False
+    db_session.commit()
+
+    response = client.get("/users/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Inactive user"
+
+
+def test_an_expired_token_is_rejected(client):
+    _register(client, "expired")
+    token = create_access_token(
+        {"sub": "expired"}, expires_delta=timedelta(minutes=-1),
+    )
+
+    response = client.get("/users/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Could not validate credentials"
+
+
+def test_a_token_for_a_deleted_user_is_rejected(client, db_session):
+    """The subject is resolved against the database on every request, so a token
+    outliving its account must stop working rather than fail open."""
+    user = _register(client, "vanishing").json()
+    token = client.post("/auth/login", data={
+        "username": "vanishing", "password": PASSWORD,
+    }).json()["access_token"]
+
+    db_session.delete(db_session.query(models.User).filter(
+        models.User.id == user["id"]
+    ).first())
+    db_session.commit()
+
+    response = client.get("/users/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
 
 
 # ── UC-1 · password hashing ──────────────────────────────────────────────────
@@ -89,7 +180,7 @@ def test_stored_hash_does_not_reveal_plaintext(client, db_session):
     whatever fields the response schema exposes.
     """
     password = "correct-horse-battery-staple"
-    username = _unique("hashcheck")
+    username = "hashcheck"
 
     response = client.post("/auth/register", json={
         "username": username,
@@ -140,7 +231,7 @@ def test_register_then_login_round_trip(client):
     that login could never use.
     """
     password = "round-trip-pass"
-    username = _unique("roundtrip")
+    username = "roundtrip"
 
     register = client.post("/auth/register", json={
         "username": username,
@@ -168,7 +259,7 @@ def test_password_change_invalidates_the_old_password(client):
     """
     old_password = "original-password"
     new_password = "rotated-password"
-    username = _unique("rotate")
+    username = "rotate"
 
     register = client.post("/auth/register", json={
         "username": username,
@@ -208,7 +299,7 @@ def test_legacy_md5_account_logs_in_and_is_upgraded(client, db_session):
     answers 500.
     """
     password = "legacy-account-pw"
-    username = _unique("legacy")
+    username = "legacy"
     legacy_digest = hashlib.md5(password.encode()).hexdigest()
 
     db_session.add(models.User(
@@ -247,7 +338,7 @@ def test_unreadable_password_hash_is_rejected_with_401(client, db_session):
     password_hash has no NOT NULL constraint and no format validation, so an
     unparseable value is reachable; passlib raises on those.
     """
-    username = _unique("corrupt")
+    username = "corrupt"
 
     db_session.add(models.User(
         username=username,

@@ -1,73 +1,99 @@
 # tests/conftest.py
 
-import uuid
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app import models
 from app.main import app
 from app.database import Base, get_db
 
-# Issue: uses a separate in-memory DB, but does not reset between individual tests
-# — tests that mutate data will bleed state into later tests
-TEST_DATABASE_URL = "sqlite:///./test.db"
-
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base.metadata.create_all(bind=engine)
-
-
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture(scope="module")  # Issue: module scope means DB state leaks between tests
-def client():
-    with TestClient(app) as c:
-        yield c
+DEFAULT_PASSWORD = "test-password"
 
 
 @pytest.fixture()
-def db_session():
-    """Direct DB access for assertions about stored rows.
+def db_engine():
+    """A fresh database per test, dropped afterwards.
 
-    Added for UC-1: proving a hash is safe means checking what was written to
-    the users table, not what the API echoed back. Shares the test database with
-    `client`, so each sees the other's commits.
+    In memory rather than a file on disk, so nothing outlives the test that
+    created it — the previous test.db kept rows between runs, which is why the
+    suite passed once and then failed on the second run.
+
+    StaticPool is what makes in-memory usable here: an in-memory SQLite
+    database belongs to the connection that opened it, so without a single
+    reused connection the application and the test would each get their own
+    empty one.
     """
-    db = TestingSessionLocal()
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
     try:
-        yield db
+        yield engine
     finally:
-        db.close()
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+@pytest.fixture()
+def db_session(db_engine):
+    """Direct database access, for assertions about what was actually stored."""
+    session = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture()
+def client(db_engine):
+    """A TestClient talking to this test's database.
+
+    Built without the context manager deliberately: entering it fires the app's
+    startup event, which calls init_db() against the real engine and would
+    create tables in taskflow.db on every single test.
+
+    The dependency override is removed afterwards so it cannot leak into a test
+    that did not ask for a client.
+    """
+    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
+
+    def _get_test_db():
+        db = TestingSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _get_test_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture()
 def make_user(client, db_session):
     """Factory: create a user with a given role, return (user_body, auth_header).
 
-    Added for UC-3, which needs three distinct actors (owner, someone else, an
-    admin) per test. Names are generated per call so tests stay independent of
-    each other and of previous runs.
+    Names are numbered per test rather than randomised — the database is empty
+    at the start of every test, so uniqueness only has to hold within one, and
+    "owner1" reads better than a uuid fragment in a failure message.
 
-    The role is set on the row directly because there is no endpoint that grants
-    one — and deliberately so, since a self-service role change would be the
-    privilege escalation this use case exists to prevent.
+    The role is set on the row directly because no endpoint grants one, and
+    deliberately so: a self-service role change would be the privilege
+    escalation the authorization rules exist to prevent.
     """
-    def _make(prefix="user", role="member"):
-        username = f"{prefix}-{uuid.uuid4().hex[:8]}"
-        password = "authz-test-password"
+    created = 0
+
+    def _make(prefix="user", role="member", password=DEFAULT_PASSWORD):
+        nonlocal created
+        created += 1
+        username = f"{prefix}{created}"
 
         user = client.post("/auth/register", json={
             "username": username,
@@ -92,19 +118,19 @@ def make_user(client, db_session):
     return _make
 
 
-@pytest.fixture(scope="module")
-def test_user_token(client):
-    """Register and log in a test user, returning a bearer token."""
-    client.post("/auth/register", json={
-        "username": "testuser",
-        "email": "testuser@example.com",
-        "password": "testpass",
-    })
-    response = client.post(
-        "/auth/login",
-        data={"username": "testuser", "password": "testpass"},
-    )
-    return response.json()["access_token"]
+@pytest.fixture()
+def make_task(client):
+    """Factory: create a task owned by the holder of `auth`, return its body.
 
+    Replaces the module-level created_task_id that used to chain the task tests
+    together — each test now creates what it needs and is handed the result.
+    """
+    def _make(auth, **overrides):
+        payload = {"title": "Test task", "priority": 2, "status": "todo"}
+        payload.update(overrides)
 
-# Issue: no fixture for DB teardown — test.db file persists after the suite runs
+        response = client.post("/tasks/", json=payload, headers=auth)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    return _make

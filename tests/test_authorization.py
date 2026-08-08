@@ -7,8 +7,6 @@ Kept in one file so the whole authorization matrix reads together — the bug wa
 that four handlers each decided for themselves, and three of them decided wrong.
 """
 
-import uuid
-
 import pytest
 
 from app import models
@@ -78,7 +76,7 @@ USER_ACTORS = [("self", 200), ("other", 403), ("admin", 200)]
 @pytest.mark.parametrize("actor, expected", USER_ACTORS)
 def test_user_update_authorization(client, db_session, make_user, actor, expected):
     target, target_auth = make_user("target")
-    new_name = f"renamed-{uuid.uuid4().hex[:8]}"
+    new_name = "renamed"
 
     response = client.put(
         f"/users/{target['id']}",
