@@ -1,12 +1,13 @@
 # app/routers/auth.py
 
-import hashlib
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
+from passlib.context import CryptContext
+from passlib.exc import UnknownHashError
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -18,13 +19,55 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-# Issue: MD5 is cryptographically broken — should use bcrypt/argon2
+# UC-1: was hashlib.md5(). MD5 is fast enough to brute-force on a GPU and was
+# used unsalted here, so equal passwords produced equal digests — rainbow-table
+# reversible. bcrypt gives a per-hash salt and a tunable cost factor.
+#
+# hex_md5 stays registered but deprecated so legacy digests still verify and get
+# upgraded on login. Drop it once no rows remain on the old scheme.
+pwd_context = CryptContext(
+    schemes=["bcrypt", "hex_md5"],
+    deprecated=["hex_md5"],
+)
+
+
 def hash_password(password: str) -> str:
-    return hashlib.md5(password.encode()).hexdigest()
+    """Hash with bcrypt. The salt is generated per call and embedded in the
+    result, so one password never hashes to the same string twice.
+
+    bcrypt silently truncates past 72 bytes; enforcing a maximum length is input
+    validation and belongs to the schema layer.
+    """
+    return pwd_context.hash(password)
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return hash_password(plain_password) == hashed_password
+def verify_and_upgrade_password(
+    plain_password: str, hashed_password: Optional[str]
+) -> Tuple[bool, Optional[str]]:
+    """Verify a password, returning ``(is_valid, upgraded_hash)``.
+
+    ``upgraded_hash`` is a fresh bcrypt hash when the stored one used a
+    deprecated scheme, ``None`` when it is already current.
+
+    MD5 is one-way, so existing hashes cannot be migrated in bulk — a successful
+    login is the only moment the plaintext is available, which is why the
+    re-hash happens there. No format branching is needed: bcrypt hashes are
+    self-describing (``$2b$…``) and passlib identifies the scheme from the
+    stored value, so no extra column is required to track it.
+    """
+    try:
+        return pwd_context.verify_and_update(plain_password, hashed_password)
+    except (UnknownHashError, ValueError, TypeError):
+        # Unparseable hash (empty, corrupt, foreign format). Without this guard
+        # passlib's exception escapes the handler and a bad credential returns
+        # 500 instead of 401.
+        return False, None
+
+
+def verify_password(plain_password: str, hashed_password: Optional[str]) -> bool:
+    """Boolean-only check, for callers that cannot persist an upgraded hash."""
+    is_valid, _ = verify_and_upgrade_password(plain_password, hashed_password)
+    return is_valid
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -73,13 +116,24 @@ def login(
         models.User.username == form_data.username
     ).first()
 
-    if not user or not verify_password(form_data.password, user.password_hash):
+    is_valid, upgraded_hash = verify_and_upgrade_password(
+        form_data.password, user.password_hash if user else None
+    )
+
+    if not user or not is_valid:
         # Issue: identical error for "user not found" vs "wrong password" is correct,
         # but the response leaks timing info — no constant-time comparison
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
+
+    # UC-1 lazy migration: overwrite the legacy digest in place, which destroys
+    # it rather than archiving it. Costs one write per account (first sign-in
+    # after deploy) and spares everyone a forced password reset.
+    if upgraded_hash:
+        user.password_hash = upgraded_hash
+        db.commit()
 
     token = create_access_token(
         data={"sub": user.username},

@@ -35,6 +35,21 @@ def client():
         yield c
 
 
+@pytest.fixture()
+def db_session():
+    """Direct DB access for assertions about stored rows.
+
+    Added for UC-1: proving a hash is safe means checking what was written to
+    the users table, not what the API echoed back. Shares the test database with
+    `client`, so each sees the other's commits.
+    """
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 @pytest.fixture(scope="module")
 def test_user_token(client):
     """Register and log in a test user, returning a bearer token."""
