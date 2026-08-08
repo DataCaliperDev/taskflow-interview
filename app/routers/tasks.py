@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app import models, schemas
 from app.database import get_db
+from app.permissions import require_owner_or_admin
 from app.routers.auth import get_current_active_user
 from app.utils.helpers import calculate_priority_score, parse_tags
 
@@ -83,8 +84,8 @@ def update_task(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    require_owner_or_admin(current_user, task.owner_id, "task")
 
-    # Issue: no ownership check — any user can update any task
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -103,8 +104,8 @@ def delete_task(
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    require_owner_or_admin(current_user, task.owner_id, "task")
 
-    # Issue: no ownership / admin check before deleting
     db.delete(task)
     db.commit()
     # Issue: should return 204 No Content; returning a body with 200 is inconsistent

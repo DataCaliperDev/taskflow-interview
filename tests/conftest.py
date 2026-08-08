@@ -1,10 +1,13 @@
 # tests/conftest.py
 
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app import models
 from app.main import app
 from app.database import Base, get_db
 
@@ -48,6 +51,45 @@ def db_session():
         yield db
     finally:
         db.close()
+
+
+@pytest.fixture()
+def make_user(client, db_session):
+    """Factory: create a user with a given role, return (user_body, auth_header).
+
+    Added for UC-3, which needs three distinct actors (owner, someone else, an
+    admin) per test. Names are generated per call so tests stay independent of
+    each other and of previous runs.
+
+    The role is set on the row directly because there is no endpoint that grants
+    one — and deliberately so, since a self-service role change would be the
+    privilege escalation this use case exists to prevent.
+    """
+    def _make(prefix="user", role="member"):
+        username = f"{prefix}-{uuid.uuid4().hex[:8]}"
+        password = "authz-test-password"
+
+        user = client.post("/auth/register", json={
+            "username": username,
+            "email": f"{username}@example.com",
+            "password": password,
+        }).json()
+
+        if role != "member":
+            row = db_session.query(models.User).filter(
+                models.User.id == user["id"]
+            ).first()
+            row.role = role
+            db_session.commit()
+
+        token = client.post("/auth/login", data={
+            "username": username,
+            "password": password,
+        }).json()["access_token"]
+
+        return user, {"Authorization": f"Bearer {token}"}
+
+    return _make
 
 
 @pytest.fixture(scope="module")
