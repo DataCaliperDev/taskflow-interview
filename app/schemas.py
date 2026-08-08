@@ -1,8 +1,14 @@
 # app/schemas.py
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_serializer
 from typing import Optional, List
 from datetime import datetime
+
+# UC-2: placeholder returned in place of the real password hash. The key stays
+# in the response for one deprecation window because there is no request
+# logging to tell us whether anything besides the React frontend consumes these
+# endpoints; removing it blind would break such a client silently.
+MASKED_PASSWORD_HASH = "***"
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
@@ -35,13 +41,29 @@ class UserOut(BaseModel):
     id: int
     username: str
     email: str
-    password_hash: str   # Issue: password hash is exposed in the response schema
+    password_hash: str = Field(
+        deprecated=True,
+        description=(
+            'Deprecated: always returns "***". Scheduled for removal one month '
+            "after this release."
+        ),
+    )
     is_active: bool
     role: str
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+    @field_serializer("password_hash")
+    def _mask_password_hash(self, _value: str) -> str:
+        """Always emit the placeholder, whatever was loaded from the database.
+
+        Masking here rather than at each endpoint means the real hash cannot
+        reach the wire through any of the five routes that return UserOut, and
+        cannot be reintroduced by passing an ORM object in directly.
+        """
+        return MASKED_PASSWORD_HASH
 
 
 class UserSummary(BaseModel):

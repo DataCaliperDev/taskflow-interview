@@ -16,13 +16,12 @@ def list_users(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    # Issue: returns ALL user records including password_hash — no role check required
+    # Issue: returns ALL user records to any authenticated caller — no role check
     return db.query(models.User).all()
 
 
 @router.get("/me", response_model=schemas.UserOut)
 def get_me(current_user: models.User = Depends(get_current_active_user)):
-    # Issue: UserOut exposes password_hash even for /me
     return current_user
 
 
