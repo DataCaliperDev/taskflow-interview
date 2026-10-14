@@ -1,23 +1,28 @@
-# app/config.py
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Application configuration
-APP_NAME = "TaskFlow"
-APP_VERSION = "1.0.0"
-DEBUG = True
 
-# Database
-DATABASE_URL = "sqlite:///./taskflow.db"
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
-# Security — intentionally hardcoded (Issue: should use env vars / pydantic-settings)
-SECRET_KEY = "supersecretkey123"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+    APP_NAME: str = "TaskFlow"
+    APP_VERSION: str = "1.0.0"
+    DEBUG: bool = True
 
-# Pagination
-DEFAULT_PAGE_SIZE = 10
-MAX_PAGE_SIZE = 100
+    DATABASE_URL: str
+    SECRET_KEY: str
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
-# Task priorities
+    DEFAULT_PAGE_SIZE: int = 10
+    MAX_PAGE_SIZE: int = 100
+
+
+settings = Settings()
+
 PRIORITY_LOW = 1
 PRIORITY_MEDIUM = 2
 PRIORITY_HIGH = 3

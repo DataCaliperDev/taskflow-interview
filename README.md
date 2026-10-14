@@ -38,13 +38,16 @@ taskflow/
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
+# 1. Copy the env template and fill in SECRET_KEY / DATABASE_URL
+cp .env.example .env
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 2. Seed the database
+# 3. Seed the database
 python scripts/seed_data.py
 
-# 3. Start the server
+# 4. Start the server
 python run.py
 ```
 
