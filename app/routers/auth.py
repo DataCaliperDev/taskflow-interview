@@ -1,16 +1,16 @@
 # app/routers/auth.py
 
-import hashlib
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
+from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+from app.config import settings
 from app.database import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -18,21 +18,26 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
-# Issue: MD5 is cryptographically broken — should use bcrypt/argon2
+# bcrypt is salted and deliberately slow, so identical passwords produce
+# different hashes and offline brute force is expensive. `hex_md5` is kept
+# only so users created before the migration can still log in; it is marked
+# deprecated, so their hash is upgraded to bcrypt on their next login.
+pwd_context = CryptContext(schemes=["bcrypt", "hex_md5"], deprecated="auto")
+
+
 def hash_password(password: str) -> str:
-    return hashlib.md5(password.encode()).hexdigest()
+    return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return hash_password(plain_password) == hashed_password
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
-    # Issue: algorithm is HS256 with a weak hardcoded secret — no RS256 or key rotation
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def get_current_user(
@@ -44,7 +49,9 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
@@ -63,6 +70,21 @@ def get_current_active_user(current_user=Depends(get_current_user)):
     return current_user
 
 
+# ── Authorization ─────────────────────────────────────────────────────────────
+
+def is_admin(user: models.User) -> bool:
+    return user.role == "admin"
+
+
+def ensure_owner_or_admin(owner_id: int, current_user: models.User) -> None:
+    """Allow the resource owner, or any admin; otherwise 403."""
+    if current_user.id != owner_id and not is_admin(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to modify this resource",
+        )
+
+
 # Issue: No rate limiting on the login endpoint — vulnerable to brute force
 @router.post("/login", response_model=schemas.Token)
 def login(
@@ -73,17 +95,28 @@ def login(
         models.User.username == form_data.username
     ).first()
 
-    if not user or not verify_password(form_data.password, user.password_hash):
-        # Issue: identical error for "user not found" vs "wrong password" is correct,
-        # but the response leaks timing info — no constant-time comparison
+    if user:
+        verified, new_hash = pwd_context.verify_and_update(
+            form_data.password, user.password_hash
+        )
+    else:
+        # Hash anyway so unknown usernames take as long as wrong passwords
+        pwd_context.dummy_verify()
+        verified, new_hash = False, None
+
+    if not verified:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
         )
 
+    if new_hash:  # legacy MD5 hash — transparently upgrade to bcrypt
+        user.password_hash = new_hash
+        db.commit()
+
     token = create_access_token(
         data={"sub": user.username},
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     return {"access_token": token, "token_type": "bearer"}
 

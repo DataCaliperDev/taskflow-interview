@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app import models, schemas
 from app.database import get_db
-from app.routers.auth import get_current_active_user
+from app.routers.auth import ensure_owner_or_admin, get_current_active_user
 from app.utils.helpers import calculate_priority_score, parse_tags
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -22,15 +22,14 @@ def list_tasks(
 ):
     """Return all tasks. Optionally filter by status or owner."""
     # Issue: No pagination — returns ALL rows; will break under load
-    tasks = db.query(models.Task).all()
-
-    # Issue: filtering done in Python instead of the database
+    # Filter in SQL so the indexes on status / owner_id can be used
+    query = db.query(models.Task)
     if status:
-        tasks = [t for t in tasks if t.status == status]
+        query = query.filter(models.Task.status == status)
     if owner_id:
-        tasks = [t for t in tasks if t.owner_id == owner_id]
+        query = query.filter(models.Task.owner_id == owner_id)
 
-    return tasks
+    return query.all()
 
 
 @router.get("/search")
@@ -84,7 +83,8 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership check — any user can update any task
+    ensure_owner_or_admin(task.owner_id, current_user)
+
     update_data = task_data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(task, key, value)
@@ -104,7 +104,8 @@ def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Issue: no ownership / admin check before deleting
+    ensure_owner_or_admin(task.owner_id, current_user)
+
     db.delete(task)
     db.commit()
     # Issue: should return 204 No Content; returning a body with 200 is inconsistent

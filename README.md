@@ -41,10 +41,14 @@ taskflow/
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Seed the database
+# 2. Configure secrets (then set SECRET_KEY in .env)
+cp .env.example .env
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# 3. Seed the database
 python scripts/seed_data.py
 
-# 3. Start the server
+# 4. Start the server
 python run.py
 ```
 
