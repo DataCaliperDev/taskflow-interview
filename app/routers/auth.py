@@ -1,38 +1,38 @@
 # app/routers/auth.py
 
-import hashlib
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
+from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+from app.config import settings
 from app.database import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Issue: MD5 is cryptographically broken — should use bcrypt/argon2
+
 def hash_password(password: str) -> str:
-    return hashlib.md5(password.encode()).hexdigest()
+    return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return hash_password(plain_password) == hashed_password
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
-    # Issue: algorithm is HS256 with a weak hardcoded secret — no RS256 or key rotation
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def get_current_user(
@@ -44,7 +44,9 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
@@ -63,6 +65,11 @@ def get_current_active_user(current_user=Depends(get_current_user)):
     return current_user
 
 
+def require_owner_or_admin(current_user, owner_id: int):
+    if current_user.role != "admin" and current_user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+
 # Issue: No rate limiting on the login endpoint — vulnerable to brute force
 @router.post("/login", response_model=schemas.Token)
 def login(
@@ -74,8 +81,6 @@ def login(
     ).first()
 
     if not user or not verify_password(form_data.password, user.password_hash):
-        # Issue: identical error for "user not found" vs "wrong password" is correct,
-        # but the response leaks timing info — no constant-time comparison
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -83,7 +88,7 @@ def login(
 
     token = create_access_token(
         data={"sub": user.username},
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
     return {"access_token": token, "token_type": "bearer"}
 
